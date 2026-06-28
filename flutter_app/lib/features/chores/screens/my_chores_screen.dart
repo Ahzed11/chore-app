@@ -43,7 +43,6 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
     final choresAsync = ref.watch(choresNotifierProvider(widget.householdId));
     final currentUserAsync = ref.watch(currentUserProvider);
     final weeklyAsync = ref.watch(weeklyLeaderboardProvider(widget.householdId));
-    final currentUserId = ref.watch(currentUserIdProvider);
 
     final String? userId = currentUserAsync.whenOrNull(data: (u) => u.id);
     final String displayName =
@@ -58,15 +57,10 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
             ?.isAdmin ??
         false;
 
-    // Weekly points + rank from leaderboard
-    int weeklyPoints = 0;
+    // Rank from leaderboard API (requires knowing other users' scores)
     int? rank;
     weeklyAsync.whenData((result) {
       rank = result.requestingUserRank;
-      final entry = result.entries
-          .where((e) => e.userId == (currentUserId ?? userId))
-          .firstOrNull;
-      if (entry != null) weeklyPoints = entry.points;
     });
 
     return PopScope(
@@ -108,6 +102,17 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                     .compareTo(a.completedAt ?? a.dueDate));
 
               final viewList = _activeTab == 'todo' ? todo : done;
+
+              // Compute weekly points from chores completed since Monday.
+              final weekStart = () {
+                final now = DateTime.now();
+                return DateTime(now.year, now.month, now.day - (now.weekday - 1));
+              }();
+              final weeklyPoints = done
+                  .where((c) =>
+                      c.completedAt != null &&
+                      !c.completedAt!.isBefore(weekStart))
+                  .fold(0, (sum, c) => sum + c.pointValue);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
