@@ -57,6 +57,8 @@ class LeaderboardResult {
     required this.scope,
     this.weekStart,
     this.weekEnd,
+    this.monthStart,
+    this.monthEnd,
     required this.entries,
     this.requestingUserRank,
   });
@@ -64,6 +66,8 @@ class LeaderboardResult {
   final LeaderboardScope scope;
   final String? weekStart;
   final String? weekEnd;
+  final String? monthStart;
+  final String? monthEnd;
   final List<LeaderboardEntry> entries;
   final int? requestingUserRank;
 
@@ -86,6 +90,8 @@ class LeaderboardResult {
       scope: scope,
       weekStart: json['week_start'] as String?,
       weekEnd: json['week_end'] as String?,
+      monthStart: json['month_start'] as String?,
+      monthEnd: json['month_end'] as String?,
       entries: entries,
       requestingUserRank: json['requesting_user_rank'] as int?,
     );

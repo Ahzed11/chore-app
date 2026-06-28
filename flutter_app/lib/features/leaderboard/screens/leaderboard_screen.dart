@@ -37,7 +37,11 @@ class LeaderboardScreen extends ConsumerStatefulWidget {
 
 class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
     with SingleTickerProviderStateMixin {
-  static const _scopes = LeaderboardScope.values; // allTime, thisWeek, thisMonth
+  static const _scopes = [
+    LeaderboardScope.thisWeek,
+    LeaderboardScope.thisMonth,
+    LeaderboardScope.allTime,
+  ];
 
   late final TabController _tabController;
 
@@ -90,9 +94,9 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
           TabBar(
             controller: _tabController,
             tabs: const [
-              Tab(icon: Icon(Icons.all_inclusive), text: 'All Time'),
               Tab(icon: Icon(Icons.calendar_view_week), text: 'This Week'),
               Tab(icon: Icon(Icons.calendar_month), text: 'This Month'),
+              Tab(icon: Icon(Icons.all_inclusive), text: 'All Time'),
             ],
           ),
           _LeaderboardBottomNav(
@@ -103,25 +107,31 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
       ),
       body: Column(
         children: [
-          // Date range subtitle (week / month scopes only).
+          // Contextual subtitle: date range for week, month name for month.
           leaderboardAsync.when(
             data: (result) {
-              if ((scope == LeaderboardScope.thisWeek ||
-                      scope == LeaderboardScope.thisMonth) &&
+              String? label;
+              if (scope == LeaderboardScope.thisWeek &&
                   result.weekStart != null &&
                   result.weekEnd != null) {
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Text(
-                    key: const Key('date_range_subtitle'),
-                    '${_formatDate(result.weekStart!)} – ${_formatDate(result.weekEnd!)}',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
-                  ),
-                );
+                label =
+                    '${_formatDate(result.weekStart!)} – ${_formatDate(result.weekEnd!)}';
+              } else if (scope == LeaderboardScope.thisMonth &&
+                  result.monthStart != null) {
+                label = DateFormat('MMMM yyyy')
+                    .format(DateTime.parse(result.monthStart!));
               }
-              return const SizedBox.shrink();
+              if (label == null) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Text(
+                  key: const Key('date_range_subtitle'),
+                  label,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.grey.shade600,
+                      ),
+                ),
+              );
             },
             loading: () => const SizedBox.shrink(),
             error: (_, __) => const SizedBox.shrink(),
