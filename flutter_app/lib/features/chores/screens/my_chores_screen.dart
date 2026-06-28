@@ -137,34 +137,44 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
 
                   // Chore list
                   Expanded(
-                    child: RefreshIndicator(
-                      color: _teal,
-                      onRefresh: () => ref
-                          .read(choresNotifierProvider(widget.householdId)
-                              .notifier)
-                          .refresh(),
-                      child: _activeTab == 'todo' && todo.isEmpty
-                          ? _AllCaughtUpState()
-                          : _activeTab == 'done' && done.isEmpty
-                              ? const _NothingDoneState()
-                              : ListView.builder(
-                                  padding: const EdgeInsets.only(
-                                      top: 8, bottom: 100),
-                                  itemCount: viewList.length,
-                                  itemBuilder: (context, index) {
-                                    final chore = viewList[index];
-                                    return ChoreCard(
-                                      key: Key('my_chore_card_${chore.id}'),
-                                      chore: chore,
-                                      showAssignee: false,
-                                      onCompleteTap:
-                                          chore.status != 'complete'
-                                              ? () => _confirmComplete(
-                                                  context, chore)
-                                              : null,
-                                    );
-                                  },
-                                ),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      ),
+                      child: RefreshIndicator(
+                        key: ValueKey(_activeTab),
+                        color: _teal,
+                        onRefresh: () => ref
+                            .read(choresNotifierProvider(widget.householdId)
+                                .notifier)
+                            .refresh(),
+                        child: _activeTab == 'todo' && todo.isEmpty
+                            ? _AllCaughtUpState()
+                            : _activeTab == 'done' && done.isEmpty
+                                ? const _NothingDoneState()
+                                : ListView.builder(
+                                    padding: const EdgeInsets.only(
+                                        top: 8, bottom: 100),
+                                    itemCount: viewList.length,
+                                    itemBuilder: (context, index) {
+                                      final chore = viewList[index];
+                                      return ChoreCard(
+                                        key: Key('my_chore_card_${chore.id}'),
+                                        chore: chore,
+                                        showAssignee: false,
+                                        onCompleteTap:
+                                            chore.status != 'complete'
+                                                ? () => _confirmComplete(
+                                                    context, chore)
+                                                : null,
+                                      );
+                                    },
+                                  ),
+                      ),
                     ),
                   ),
                 ],

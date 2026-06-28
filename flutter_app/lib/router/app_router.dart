@@ -34,6 +34,41 @@ class AppRoutes {
 }
 
 // ---------------------------------------------------------------------------
+// Transition helpers
+// ---------------------------------------------------------------------------
+
+/// Fade transition for tab-level navigation (bottom nav switches).
+/// Instant-feeling at 200 ms — no directional bias.
+Page<void> _tabPage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 200),
+    reverseTransitionDuration: const Duration(milliseconds: 150),
+    transitionsBuilder: (_, animation, __, child) => FadeTransition(
+      opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+      child: child,
+    ),
+  );
+}
+
+/// Slide-from-right for child / detail screens pushed on top of a tab.
+Page<void> _slidePage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 300),
+    reverseTransitionDuration: const Duration(milliseconds: 250),
+    transitionsBuilder: (_, animation, __, child) => SlideTransition(
+      position: Tween(begin: const Offset(1.0, 0.0), end: Offset.zero).animate(
+        CurvedAnimation(parent: animation, curve: Curves.easeInOutCubic),
+      ),
+      child: child,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Router provider
 // ---------------------------------------------------------------------------
 
@@ -68,84 +103,83 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      // Auth routes
+      // Auth routes — simple fade so the login↔register transition isn't jarring
       GoRoute(
         path: '/login',
         name: AppRoutes.login,
-        builder: (context, state) => const LoginScreen(),
+        pageBuilder: (context, state) =>
+            _tabPage(state, const LoginScreen()),
       ),
       GoRoute(
         path: '/register',
         name: AppRoutes.register,
-        builder: (context, state) => const RegisterScreen(),
+        pageBuilder: (context, state) =>
+            _tabPage(state, const RegisterScreen()),
       ),
 
-      // Household dashboard
+      // Household dashboard — fade (top-level, like a tab)
       GoRoute(
         path: '/households',
         name: AppRoutes.households,
-        builder: (context, state) => const HouseholdDashboardScreen(),
+        pageBuilder: (context, state) =>
+            _tabPage(state, const HouseholdDashboardScreen()),
       ),
 
-      // Household-scoped routes
+      // ── Tab screens — fade so bottom-nav switches feel instant ──────────
       GoRoute(
         path: '/households/:householdId/chores',
         name: AppRoutes.choreList,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          return ChoreListScreen(householdId: id);
+          return _tabPage(state, ChoreListScreen(householdId: id));
         },
       ),
       GoRoute(
         path: '/households/:householdId/my-chores',
         name: AppRoutes.myChores,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          return MyChoresScreen(householdId: id);
+          return _tabPage(state, MyChoresScreen(householdId: id));
         },
       ),
       GoRoute(
         path: '/households/:householdId/leaderboard',
         name: AppRoutes.leaderboard,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          return LeaderboardScreen(householdId: id);
+          return _tabPage(state, LeaderboardScreen(householdId: id));
         },
       ),
+
+      // ── Child / detail screens — slide from right ────────────────────────
       GoRoute(
         path: '/households/:householdId/manage',
         name: AppRoutes.householdManage,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          return HouseholdManagementScreen(householdId: id);
+          return _slidePage(state, HouseholdManagementScreen(householdId: id));
         },
       ),
       GoRoute(
         path: '/households/:householdId/chores/create',
         name: AppRoutes.createChore,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          // state.extra is non-null when navigating to edit an existing chore.
           final initData = state.extra as ChoreFormInitData?;
-          return CreateChoreScreen(householdId: id, initData: initData);
+          return _slidePage(
+              state, CreateChoreScreen(householdId: id, initData: initData));
         },
       ),
       GoRoute(
         path: '/households/:householdId/invite',
         name: AppRoutes.invite,
-        builder: (context, state) {
+        pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
-          // HouseholdManagementScreen navigates here with the API response
-          // already fetched and passed as extra — reuse it to avoid a duplicate
-          // network call.  When navigating directly (deep link / refresh) the
-          // extra is null and InviteScreen fetches on init instead.
           final extra = state.extra as Map<String, dynamic>?;
           final initialInvite =
               extra != null ? InviteResponse.fromJson(extra) : null;
-          return InviteScreen(
-            householdId: id,
-            initialInvite: initialInvite,
-          );
+          return _slidePage(
+              state, InviteScreen(householdId: id, initialInvite: initialInvite));
         },
       ),
     ],
