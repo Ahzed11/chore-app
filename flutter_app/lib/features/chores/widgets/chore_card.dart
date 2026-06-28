@@ -45,11 +45,21 @@ class ChoreCard extends StatelessWidget {
     final isComplete = chore.status == 'complete';
     final isOverdue = chore.isOverdue;
 
+    // Done state colours from design spec
+    final cardBg =
+        isComplete ? const Color(0xFFF4F9F8) : Colors.white;
+    final cardBorder =
+        isComplete ? const Color(0xFFE6EFED) : const Color(0xFFEBF1F0);
+    final titleColor =
+        isComplete ? const Color(0xFF9FB6B3) : const Color(0xFF0F2E2C);
+    final metaColor =
+        isComplete ? const Color(0xFFB3C6C3) : const Color(0xFF8AA19E);
+
     Widget card = Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFEBF1F0)),
+        color: cardBg,
+        border: Border.all(color: cardBorder),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Padding(
@@ -81,34 +91,40 @@ class ChoreCard extends StatelessWidget {
                       const SizedBox(width: 4),
                       Text(
                         catLabel,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF8AA19E),
+                          color: metaColor,
                         ),
                       ),
                       if (isRecurring) ...[
                         const SizedBox(width: 6),
-                        const Icon(
+                        Icon(
                           Icons.refresh_rounded,
                           size: 13,
-                          color: Color(0xFFB3C6C3),
+                          color: metaColor,
                         ),
+                      ],
+                      if (isComplete) ...[
+                        const SizedBox(width: 6),
+                        _DonePill(),
                       ],
                     ],
                   ),
 
                   const SizedBox(height: 5),
 
-                  // Title — same style regardless of completion state;
-                  // the filled circle is the sole done indicator (matches design).
+                  // Title
                   Text(
                     chore.title,
                     key: Key('chore_title_${chore.id}'),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF0F2E2C),
+                      color: titleColor,
+                      decoration:
+                          isComplete ? TextDecoration.lineThrough : null,
+                      decorationColor: titleColor,
                     ),
                   ),
 
@@ -117,27 +133,25 @@ class ChoreCard extends StatelessWidget {
                   // Assignee + due date row
                   Row(
                     children: [
-                      _MiniAvatar(
-                        name: chore.assigneeName ?? '?',
-                      ),
+                      _MiniAvatar(name: chore.assigneeName ?? '?'),
                       const SizedBox(width: 5),
                       Flexible(
                         child: Text(
                           chore.assigneeName ?? 'Unassigned',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
-                            color: Color(0xFF8AA19E),
+                            color: metaColor,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       const SizedBox(width: 8),
-                      const Text(
+                      Text(
                         '·',
                         style: TextStyle(
                           fontSize: 13,
-                          color: Color(0xFF8AA19E),
+                          color: metaColor,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -148,7 +162,7 @@ class ChoreCard extends StatelessWidget {
                           fontWeight: FontWeight.w500,
                           color: isOverdue
                               ? const Color(0xFFF87171)
-                              : const Color(0xFF8AA19E),
+                              : metaColor,
                         ),
                       ),
                     ],
@@ -160,14 +174,16 @@ class ChoreCard extends StatelessWidget {
             const SizedBox(width: 10),
 
             // ---- Points ----
-            Text(
-              '+${chore.pointValue}',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF0D9488),
-              ),
-            ),
+            isComplete
+                ? _PointsPill(points: chore.pointValue)
+                : Text(
+                    '+${chore.pointValue}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0D9488),
+                    ),
+                  ),
           ],
         ),
       ),
@@ -276,6 +292,76 @@ class _StatusCircle extends StatelessWidget {
                   color: Colors.red.shade400,
                 )
               : null,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "Done" pill shown in category row
+// ---------------------------------------------------------------------------
+
+class _DonePill extends StatelessWidget {
+  const _DonePill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFD8F0EC),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.check_rounded, size: 11, color: Color(0xFF0D9488)),
+          SizedBox(width: 4),
+          Text(
+            'Done',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0D9488),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Teal points pill shown when chore is complete
+// ---------------------------------------------------------------------------
+
+class _PointsPill extends StatelessWidget {
+  const _PointsPill({required this.points});
+
+  final int points;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D9488),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_rounded, size: 12, color: Colors.white),
+          const SizedBox(width: 3),
+          Text(
+            '$points',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
