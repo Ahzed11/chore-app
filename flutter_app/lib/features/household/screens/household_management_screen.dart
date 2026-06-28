@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
@@ -442,7 +443,31 @@ class _HouseholdManagementScreenState
                             ],
                           ),
                         ),
-                        const SizedBox(height: 11),
+                        const SizedBox(height: 14),
+                        Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(color: const Color(0xFFE6EDEC)),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: QrImageView(
+                              data: _inviteResponse!.inviteUrl,
+                              version: QrVersions.auto,
+                              size: 160,
+                              eyeStyle: const QrEyeStyle(
+                                eyeShape: QrEyeShape.square,
+                                color: _darkText,
+                              ),
+                              dataModuleStyle: const QrDataModuleStyle(
+                                dataModuleShape: QrDataModuleShape.square,
+                                color: _darkText,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
                         GestureDetector(
                           onTap: _copyInviteLink,
                           child: Container(
