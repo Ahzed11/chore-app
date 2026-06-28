@@ -24,7 +24,7 @@ dependencies:
   # QR code generation (for invite screen)
   qr_flutter: ^4.1.0
   # Share sheet
-  share_plus: ^9.0.0
+  share_plus: ^10.0.0
   # Internationalisation / date formatting
   intl: ^0.19.0
 
