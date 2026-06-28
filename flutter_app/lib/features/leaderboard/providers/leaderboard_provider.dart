@@ -79,3 +79,15 @@ final leaderboardProvider = FutureProvider.family<LeaderboardResult, String>(
     return LeaderboardResult.fromJson(response.data!);
   },
 );
+
+/// Always fetches this_week — used by the My Chores points banner.
+final weeklyLeaderboardProvider = FutureProvider.family<LeaderboardResult, String>(
+  (ref, householdId) async {
+    final dio = ref.watch(dioProvider);
+    final response = await dio.get<Map<String, dynamic>>(
+      ApiEndpoints.leaderboard(householdId),
+      queryParameters: {'scope': LeaderboardScope.thisWeek.apiValue},
+    );
+    return LeaderboardResult.fromJson(response.data!);
+  },
+);

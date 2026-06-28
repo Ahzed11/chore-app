@@ -20,6 +20,13 @@ Color _colorForName(String name) {
   return _avatarColors[name.codeUnitAt(0) % _avatarColors.length];
 }
 
+bool _isToday(DateTime date) {
+  final now = DateTime.now();
+  return date.year == now.year &&
+      date.month == now.month &&
+      date.day == now.day;
+}
+
 // ---------------------------------------------------------------------------
 // ChoreCard
 // ---------------------------------------------------------------------------
@@ -30,11 +37,19 @@ class ChoreCard extends StatelessWidget {
     required this.chore,
     this.isAdmin = false,
     this.onDeleteSeries,
+    this.showAssignee = true,
+    this.onCompleteTap,
   });
 
   final ChoreModel chore;
   final bool isAdmin;
   final VoidCallback? onDeleteSeries;
+
+  /// When false, the assignee row is replaced by a calendar-icon + due date row.
+  final bool showAssignee;
+
+  /// If non-null and the chore is not complete, the status circle becomes tappable.
+  final VoidCallback? onCompleteTap;
 
   @override
   Widget build(BuildContext context) {
@@ -46,14 +61,31 @@ class ChoreCard extends StatelessWidget {
     final isOverdue = chore.isOverdue;
 
     // Done state colours from design spec
-    final cardBg =
-        isComplete ? const Color(0xFFF4F9F8) : Colors.white;
+    final cardBg = isComplete ? const Color(0xFFF4F9F8) : Colors.white;
     final cardBorder =
         isComplete ? const Color(0xFFE6EFED) : const Color(0xFFEBF1F0);
     final titleColor =
         isComplete ? const Color(0xFF9FB6B3) : const Color(0xFF0F2E2C);
     final metaColor =
         isComplete ? const Color(0xFFB3C6C3) : const Color(0xFF8AA19E);
+
+    // Due date colour: teal if today + pending, red if overdue, else meta
+    final todayAndPending = !isComplete && !isOverdue && _isToday(chore.dueDate);
+    final dueColor = isComplete
+        ? metaColor
+        : (isOverdue
+            ? const Color(0xFFF87171)
+            : (todayAndPending ? const Color(0xFF0D9488) : metaColor));
+
+    Widget statusCircle =
+        _StatusCircle(isComplete: isComplete, isOverdue: isOverdue);
+
+    if (onCompleteTap != null && !isComplete) {
+      statusCircle = GestureDetector(
+        onTap: onCompleteTap,
+        child: statusCircle,
+      );
+    }
 
     Widget card = Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -68,7 +100,7 @@ class ChoreCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // ---- Status circle ----
-            _StatusCircle(isComplete: isComplete, isOverdue: isOverdue),
+            statusCircle,
 
             const SizedBox(width: 14),
 
@@ -107,7 +139,7 @@ class ChoreCard extends StatelessWidget {
                       ],
                       if (isComplete) ...[
                         const SizedBox(width: 6),
-                        _DonePill(),
+                        const _DonePill(),
                       ],
                     ],
                   ),
@@ -130,43 +162,18 @@ class ChoreCard extends StatelessWidget {
 
                   const SizedBox(height: 7),
 
-                  // Assignee + due date row
-                  Row(
-                    children: [
-                      _MiniAvatar(name: chore.assigneeName ?? '?'),
-                      const SizedBox(width: 5),
-                      Flexible(
-                        child: Text(
-                          chore.assigneeName ?? 'Unassigned',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: metaColor,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '·',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: metaColor,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatDate(chore.dueDate),
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: isOverdue
-                              ? const Color(0xFFF87171)
-                              : metaColor,
-                        ),
-                      ),
-                    ],
-                  ),
+                  // Bottom info row
+                  if (showAssignee)
+                    _AssigneeRow(
+                      chore: chore,
+                      metaColor: metaColor,
+                      isOverdue: isOverdue,
+                    )
+                  else
+                    _DueDateRow(
+                      date: chore.dueDate,
+                      dueColor: dueColor,
+                    ),
                 ],
               ),
             ),
@@ -241,17 +248,96 @@ class ChoreCard extends StatelessWidget {
       ),
     );
   }
+}
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Assignee + due date row (default — shown in All Chores)
+// ---------------------------------------------------------------------------
 
-  String _formatDate(DateTime date) {
+class _AssigneeRow extends StatelessWidget {
+  const _AssigneeRow({
+    required this.chore,
+    required this.metaColor,
+    required this.isOverdue,
+  });
+
+  final ChoreModel chore;
+  final Color metaColor;
+  final bool isOverdue;
+
+  @override
+  Widget build(BuildContext context) {
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
-    return '${months[date.month - 1]} ${date.day}';
+    final dateStr =
+        '${months[chore.dueDate.month - 1]} ${chore.dueDate.day}';
+
+    return Row(
+      children: [
+        _MiniAvatar(name: chore.assigneeName ?? '?'),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            chore.assigneeName ?? 'Unassigned',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: metaColor,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('·', style: TextStyle(fontSize: 13, color: metaColor)),
+        const SizedBox(width: 8),
+        Text(
+          dateStr,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: isOverdue ? const Color(0xFFF87171) : metaColor,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Calendar icon + due date row (My Chores — no assignee)
+// ---------------------------------------------------------------------------
+
+class _DueDateRow extends StatelessWidget {
+  const _DueDateRow({required this.date, required this.dueColor});
+
+  final DateTime date;
+  final Color dueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final isToday = _isToday(date);
+    final label = isToday ? 'Today' : '${months[date.month - 1]} ${date.day}';
+
+    return Row(
+      children: [
+        Icon(Icons.calendar_today_outlined, size: 14, color: dueColor),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: dueColor,
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -286,11 +372,7 @@ class _StatusCircle extends StatelessWidget {
       child: isComplete
           ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
           : isOverdue
-              ? Icon(
-                  Icons.priority_high,
-                  size: 14,
-                  color: Colors.red.shade400,
-                )
+              ? Icon(Icons.priority_high, size: 14, color: Colors.red.shade400)
               : null,
     );
   }
