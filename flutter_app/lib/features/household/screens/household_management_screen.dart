@@ -103,7 +103,7 @@ class _HouseholdManagementScreenState
         ApiEndpoints.householdInvites(widget.householdId),
       );
       if (!mounted) return;
-      router.goNamed(
+      router.pushNamed(
         'invite',
         pathParameters: {'householdId': widget.householdId},
         extra: response.data,

@@ -102,7 +102,7 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
               key: const Key('manage_members_button'),
               icon: const Icon(Icons.group_rounded),
               tooltip: 'Manage members',
-              onPressed: () => context.goNamed(
+              onPressed: () => context.pushNamed(
                 AppRoutes.householdManage,
                 pathParameters: {'householdId': widget.householdId},
               ),

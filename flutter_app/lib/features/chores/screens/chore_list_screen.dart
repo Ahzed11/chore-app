@@ -110,7 +110,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
               key: const Key('manage_members_button'),
               icon: const Icon(Icons.group_rounded),
               tooltip: 'Manage members',
-              onPressed: () => context.goNamed(
+              onPressed: () => context.pushNamed(
                 'household-manage',
                 pathParameters: {'householdId': widget.householdId},
               ),
