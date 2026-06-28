@@ -100,19 +100,15 @@ class ChoreCard extends StatelessWidget {
 
                   const SizedBox(height: 5),
 
-                  // Title
+                  // Title — same style regardless of completion state;
+                  // the filled circle is the sole done indicator (matches design).
                   Text(
                     chore.title,
                     key: Key('chore_title_${chore.id}'),
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: isComplete
-                          ? const Color(0xFF8AA19E)
-                          : const Color(0xFF0F2E2C),
-                      decoration:
-                          isComplete ? TextDecoration.lineThrough : null,
-                      decorationColor: const Color(0xFF8AA19E),
+                      color: Color(0xFF0F2E2C),
                     ),
                   ),
 
