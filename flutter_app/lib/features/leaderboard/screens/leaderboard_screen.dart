@@ -24,42 +24,86 @@ String _formatDate(String iso) {
 // LeaderboardScreen
 // ---------------------------------------------------------------------------
 
-class LeaderboardScreen extends ConsumerWidget {
+class LeaderboardScreen extends ConsumerStatefulWidget {
   const LeaderboardScreen({super.key, required this.householdId});
 
   final String householdId;
 
-  // Bottom-nav tab index for this screen.
-  static const int _tabIndex = 2;
+  static const int _navIndex = 2;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LeaderboardScreen> createState() => _LeaderboardScreenState();
+}
+
+class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
+    with SingleTickerProviderStateMixin {
+  static const _scopes = LeaderboardScope.values; // allTime, thisWeek, thisMonth
+
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialScope = ref.read(leaderboardScopeNotifierProvider);
+    _tabController = TabController(
+      length: _scopes.length,
+      vsync: this,
+      initialIndex: _scopes.indexOf(initialScope),
+    );
+    _tabController.addListener(_onTabChanged);
+  }
+
+  @override
+  void dispose() {
+    _tabController
+      ..removeListener(_onTabChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onTabChanged() {
+    if (_tabController.indexIsChanging) return;
+    ref
+        .read(leaderboardScopeNotifierProvider.notifier)
+        .setScope(_scopes[_tabController.index]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final scope = ref.watch(leaderboardScopeNotifierProvider);
-    final leaderboardAsync = ref.watch(leaderboardProvider(householdId));
+    final leaderboardAsync =
+        ref.watch(leaderboardProvider(widget.householdId));
     final currentUserId = ref.watch(currentUserIdProvider);
+
+    // Keep tab in sync if scope was changed externally.
+    final scopeIndex = _scopes.indexOf(scope);
+    if (_tabController.index != scopeIndex) {
+      _tabController.animateTo(scopeIndex);
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Leaderboard')),
+      // Tab selector sits above the main nav bar, always reachable at the bottom.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TabBar(
+            controller: _tabController,
+            tabs: const [
+              Tab(icon: Icon(Icons.all_inclusive), text: 'All Time'),
+              Tab(icon: Icon(Icons.calendar_view_week), text: 'This Week'),
+              Tab(icon: Icon(Icons.calendar_month), text: 'This Month'),
+            ],
+          ),
+          _LeaderboardBottomNav(
+            householdId: widget.householdId,
+            currentIndex: LeaderboardScreen._navIndex,
+          ),
+        ],
+      ),
       body: Column(
         children: [
-          // ----------------------------------------------------------------
-          // Scope selector
-          // ----------------------------------------------------------------
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: _ScopeSelector(
-              selected: scope,
-              onScopeChanged: (newScope) {
-                ref
-                    .read(leaderboardScopeNotifierProvider.notifier)
-                    .setScope(newScope);
-              },
-            ),
-          ),
-
-          // ----------------------------------------------------------------
-          // Date range subtitle (week / month scopes only)
-          // ----------------------------------------------------------------
+          // Date range subtitle (week / month scopes only).
           leaderboardAsync.when(
             data: (result) {
               if ((scope == LeaderboardScope.thisWeek ||
@@ -67,7 +111,7 @@ class LeaderboardScreen extends ConsumerWidget {
                   result.weekStart != null &&
                   result.weekEnd != null) {
                 return Padding(
-                  padding: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: Text(
                     key: const Key('date_range_subtitle'),
                     '${_formatDate(result.weekStart!)} – ${_formatDate(result.weekEnd!)}',
@@ -86,9 +130,6 @@ class LeaderboardScreen extends ConsumerWidget {
           const SizedBox(height: 8),
           const Divider(height: 1),
 
-          // ----------------------------------------------------------------
-          // List / loading / error
-          // ----------------------------------------------------------------
           Expanded(
             child: leaderboardAsync.when(
               data: (result) {
@@ -121,50 +162,12 @@ class LeaderboardScreen extends ConsumerWidget {
                 key: const Key('error_widget'),
                 message: error.toString(),
                 onRetry: () =>
-                    ref.invalidate(leaderboardProvider(householdId)),
+                    ref.invalidate(leaderboardProvider(widget.householdId)),
               ),
             ),
           ),
         ],
       ),
-      bottomNavigationBar: _LeaderboardBottomNav(
-        householdId: householdId,
-        currentIndex: _tabIndex,
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Scope selector
-// ---------------------------------------------------------------------------
-
-class _ScopeSelector extends StatelessWidget {
-  const _ScopeSelector({
-    required this.selected,
-    required this.onScopeChanged,
-  });
-
-  final LeaderboardScope selected;
-  final ValueChanged<LeaderboardScope> onScopeChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return SegmentedButton<LeaderboardScope>(
-      key: const Key('scope_selector'),
-      segments: LeaderboardScope.values
-          .map(
-            (s) => ButtonSegment<LeaderboardScope>(
-              value: s,
-              label: Text(s.label),
-            ),
-          )
-          .toList(),
-      selected: {selected},
-      onSelectionChanged: (selection) {
-        if (selection.isNotEmpty) onScopeChanged(selection.first);
-      },
-      showSelectedIcon: false,
     );
   }
 }
@@ -200,8 +203,7 @@ class _LeaderboardBottomNav extends StatelessWidget {
               pathParameters: {'householdId': householdId},
             );
           case 2:
-            // Already on leaderboard — no-op.
-            break;
+            break; // Already on leaderboard.
         }
       },
       items: const [
