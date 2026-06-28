@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:dio/dio.dart';
+
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../../household/models/member_model.dart';
 import '../../household/providers/household_provider.dart';
 import '../../household/providers/members_provider.dart';
+import '../../leaderboard/providers/leaderboard_provider.dart';
 import '../models/chore_model.dart';
 import '../providers/chores_provider.dart';
 import '../widgets/chore_card.dart';
@@ -108,6 +111,45 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Complete confirmation
+  // ---------------------------------------------------------------------------
+
+  Future<void> _confirmComplete(ChoreModel chore) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    final confirmed = await showChoreCompleteSheet(context, chore);
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await ref
+          .read(choresNotifierProvider(widget.householdId).notifier)
+          .completeChore(chore.id);
+      if (!mounted) return;
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('You earned ${chore.pointValue} points!'),
+          backgroundColor: _teal,
+        ),
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final code = e.response?.statusCode;
+      scaffoldMessenger.showSnackBar(SnackBar(
+        content: Text(code == 409
+            ? 'This chore was already completed.'
+            : code == 403
+                ? 'You are not assigned to this chore.'
+                : 'Failed to complete chore. Please try again.'),
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(content: Text('Failed to complete chore. Please try again.')),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
 
@@ -134,6 +176,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
 
     final List<MemberModel> members =
         membersAsync.valueOrNull ?? const [];
+    final String? currentUserId = ref.watch(currentUserIdProvider);
 
     return PopScope(
       canPop: false,
@@ -205,6 +248,9 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                               itemCount: filtered.length,
                               itemBuilder: (context, index) {
                                 final chore = filtered[index];
+                                final isMyChore =
+                                    currentUserId != null &&
+                                    chore.assigneeId == currentUserId;
                                 return ChoreCard(
                                   key: Key('chore_card_${chore.id}'),
                                   chore: chore,
@@ -215,6 +261,10 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                                             chore.definitionId,
                                             chore.title,
                                           )
+                                      : null,
+                                  onCompleteTap: isMyChore &&
+                                          chore.status != 'complete'
+                                      ? () => _confirmComplete(chore)
                                       : null,
                                 );
                               },

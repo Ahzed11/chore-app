@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../models/chore_model.dart';
 
+const _teal = Color(0xFF0D9488);
+
 // ---------------------------------------------------------------------------
 // Avatar colour palette
 // ---------------------------------------------------------------------------
@@ -446,6 +448,128 @@ class _PointsPill extends StatelessWidget {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Complete-chore confirmation sheet (shared between All Chores + My Chores)
+// ---------------------------------------------------------------------------
+
+/// Shows a bottom sheet asking the user to confirm completing [chore].
+/// Returns `true` when confirmed, `false`/`null` when dismissed.
+Future<bool?> showChoreCompleteSheet(BuildContext context, ChoreModel chore) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => _ChoreCompleteSheet(chore: chore),
+  );
+}
+
+class _ChoreCompleteSheet extends StatelessWidget {
+  const _ChoreCompleteSheet({required this.chore});
+
+  final ChoreModel chore;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Text(
+              'Complete chore?',
+              key: const Key('complete_sheet_title'),
+              style: theme.textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              chore.title,
+              style:
+                  theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Effort: ${_capitalize(chore.effortLevel)}',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD8F0EC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.star_rounded,
+                      color: Color(0xFFFBBF24), size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Complete this task and earn ${chore.pointValue} points!',
+                      key: const Key('confirm_points_text'),
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('confirm_cancel_button'),
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('confirm_done_button'),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _teal,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Complete'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 }
 
 // ---------------------------------------------------------------------------
