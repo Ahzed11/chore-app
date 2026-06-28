@@ -20,7 +20,6 @@ const _mutedText = Color(0xFF9FB6B3);
 const _inactiveTab = Color(0xFFA8BCB9);
 const _borderLight = Color(0xFFE6EDEC);
 const _filterBorder = Color(0xFFEEF3F2);
-const int _weeklyGoal = 60;
 
 // ---------------------------------------------------------------------------
 // MyChoresScreen
@@ -317,12 +316,6 @@ class _WeeklyPointsBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remaining = (_weeklyGoal - weeklyPoints).clamp(0, _weeklyGoal);
-    final pct = (weeklyPoints / _weeklyGoal).clamp(0.0, 1.0);
-    final rewardLabel = remaining > 0
-        ? '$remaining pts to your next reward — a free chore pass'
-        : 'Reward unlocked! Claim your free chore pass 🎉';
-
     return Container(
       margin: const EdgeInsets.fromLTRB(24, 18, 24, 0),
       padding: const EdgeInsets.all(18),
@@ -408,34 +401,6 @@ class _WeeklyPointsBanner extends StatelessWidget {
                   ),
                 ),
             ],
-          ),
-          const SizedBox(height: 15),
-          // Progress bar
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: Container(
-              height: 8,
-              color: Colors.white.withValues(alpha: 0.2),
-              child: FractionallySizedBox(
-                alignment: Alignment.centerLeft,
-                widthFactor: pct,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFBBF24),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            rewardLabel,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: Colors.white.withValues(alpha: 0.92),
-            ),
           ),
         ],
       ),
