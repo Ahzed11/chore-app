@@ -1,15 +1,47 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
-import '../../../core/api/api_client.dart';
-import '../../../core/api/api_endpoints.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../../leaderboard/providers/leaderboard_provider.dart';
+import '../models/household_model.dart';
+import '../models/member_model.dart';
+import '../models/invite_model.dart';
 import '../providers/household_provider.dart';
 import '../providers/members_provider.dart';
-import '../widgets/member_tile.dart';
+import '../providers/invite_provider.dart';
+
+// ---------------------------------------------------------------------------
+// Colors & helpers
+// ---------------------------------------------------------------------------
+
+const _teal = Color(0xFF0D9488);
+const _darkText = Color(0xFF0F2E2C);
+const _secondaryText = Color(0xFF8AA19E);
+const _bgPage = Color(0xFFF4F8F7);
+const _borderCard = Color(0xFFEBF1F0);
+
+const List<Color> _avatarColors = [
+  Color(0xFF14B8A6),
+  Color(0xFF0EA5E9),
+  Color(0xFF8B5CF6),
+  Color(0xFF22C55E),
+  Color(0xFFF472B6),
+  Color(0xFFF97316),
+  Color(0xFF0D9488),
+];
+
+Color _avatarColor(String name) {
+  if (name.isEmpty) return _avatarColors[0];
+  return _avatarColors[name.codeUnitAt(0) % _avatarColors.length];
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 
 class HouseholdManagementScreen extends ConsumerStatefulWidget {
   const HouseholdManagementScreen({super.key, required this.householdId});
@@ -23,100 +55,56 @@ class HouseholdManagementScreen extends ConsumerStatefulWidget {
 
 class _HouseholdManagementScreenState
     extends ConsumerState<HouseholdManagementScreen> {
-  // -------------------------------------------------------------------------
-  // Household name edit dialog
-  // -------------------------------------------------------------------------
+  bool _isEditingName = false;
+  final _nameController = TextEditingController();
+  bool _inviteOpen = false;
+  InviteResponse? _inviteResponse;
+  bool _inviteLoading = false;
+  bool _copied = false;
 
-  Future<void> _showEditNameDialog(String currentName) async {
-    final controller = TextEditingController(text: currentName);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('edit_name_dialog'),
-        title: const Text('Edit household name'),
-        content: TextField(
-          key: const Key('edit_name_field'),
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Household name',
-          ),
-          textCapitalization: TextCapitalization.words,
-        ),
-        actions: [
-          TextButton(
-            key: const Key('edit_name_cancel'),
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            key: const Key('edit_name_confirm'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    // Capture name BEFORE disposing the controller.
-    final newName = controller.text.trim();
-    controller.dispose();
-
-    if (confirmed != true) return;
-    if (!mounted) return;
-    if (newName.isEmpty || newName == currentName) return;
-
-    // Capture context-dependent references before any further await.
-    // ignore: use_build_context_synchronously
-    final messenger = ScaffoldMessenger.of(context);
-    // ignore: use_build_context_synchronously
-    final errorColor = Theme.of(context).colorScheme.error;
-
-    try {
-      await ref
-          .read(householdsNotifierProvider.notifier)
-          .updateHouseholdName(widget.householdId, newName);
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed to update name: $e'),
-          backgroundColor: errorColor,
-        ),
-      );
-    }
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
   }
 
   // -------------------------------------------------------------------------
   // Invite
   // -------------------------------------------------------------------------
 
-  Future<void> _generateInvite() async {
-    // Capture context-dependent references before the await.
-    final messenger = ScaffoldMessenger.of(context);
-    final errorColor = Theme.of(context).colorScheme.error;
-    final router = GoRouter.of(context);
-    final dio = ref.read(dioProvider);
+  void _toggleInvite() {
+    setState(() => _inviteOpen = !_inviteOpen);
+    if (_inviteOpen && _inviteResponse == null) _fetchInvite();
+  }
 
+  Future<void> _fetchInvite() async {
+    setState(() => _inviteLoading = true);
     try {
-      final response = await dio.post<Map<String, dynamic>>(
-        ApiEndpoints.householdInvites(widget.householdId),
-      );
-      if (!mounted) return;
-      router.pushNamed(
-        'invite',
-        pathParameters: {'householdId': widget.householdId},
-        extra: response.data,
-      );
+      final inv =
+          await ref.read(inviteApiProvider).generateInvite(widget.householdId);
+      if (mounted) {
+        setState(() {
+          _inviteResponse = inv;
+          _inviteLoading = false;
+        });
+      }
     } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed to generate invite: $e'),
-          backgroundColor: errorColor,
-        ),
-      );
+      if (mounted) setState(() => _inviteLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to generate invite: $e')),
+        );
+      }
     }
+  }
+
+  Future<void> _copyInviteLink() async {
+    if (_inviteResponse == null) return;
+    await Clipboard.setData(ClipboardData(text: _inviteResponse!.inviteUrl));
+    setState(() => _copied = true);
+    Future.delayed(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _copied = false);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -153,10 +141,8 @@ class _HouseholdManagementScreenState
 
     if (confirmed != true || !mounted) return;
 
-    // Capture context-dependent references before any further await.
     final router = GoRouter.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final errorColor = Theme.of(context).colorScheme.error;
 
     try {
       await ref
@@ -186,10 +172,7 @@ class _HouseholdManagementScreenState
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed to leave household: $e'),
-          backgroundColor: errorColor,
-        ),
+        SnackBar(content: Text('Failed to leave household: $e')),
       );
     }
   }
@@ -201,154 +184,624 @@ class _HouseholdManagementScreenState
   @override
   Widget build(BuildContext context) {
     final householdsAsync = ref.watch(householdsNotifierProvider);
-    final membersAsync =
-        ref.watch(membersNotifierProvider(widget.householdId));
+    final membersAsync = ref.watch(membersNotifierProvider(widget.householdId));
     final currentUserId = ref.watch(currentUserIdProvider);
 
-    // Retrieve the current household from the list provider.
     final household = householdsAsync.valueOrNull
         ?.where((h) => h.id == widget.householdId)
         .firstOrNull;
 
-    final householdName = household?.name ?? '';
+    if (householdsAsync.isLoading) {
+      return const Scaffold(backgroundColor: _bgPage, body: LoadingWidget());
+    }
+
+    if (household == null) {
+      return const Scaffold(
+        backgroundColor: _bgPage,
+        body: Center(child: Text('Household not found')),
+      );
+    }
+
+    final members = membersAsync.valueOrNull ?? [];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Manage Household')),
-      body: CustomScrollView(
-        slivers: [
-          // ------------------------------------------------------------------
-          // Section 1 — Household info
-          // ------------------------------------------------------------------
-          const SliverToBoxAdapter(
-            child: _SectionHeader(title: 'Household Info'),
-          ),
-          SliverToBoxAdapter(
-            child: Card(
-              margin:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: ListTile(
-                key: const Key('household_name_tile'),
-                leading: const Icon(Icons.home_rounded),
-                title: householdsAsync.isLoading
-                    ? const Text('Loading…')
-                    : Text(
-                        householdName,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                subtitle: const Text('Tap to rename'),
-                trailing: const Icon(Icons.edit_rounded),
-                onTap: householdsAsync.isLoading
-                    ? null
-                    : () => _showEditNameDialog(householdName),
-              ),
-            ),
-          ),
-
-          // ------------------------------------------------------------------
-          // Section 2 — Members
-          // ------------------------------------------------------------------
-          const SliverToBoxAdapter(
-            child: _SectionHeader(title: 'Members'),
-          ),
-          membersAsync.when(
-            loading: () =>
-                const SliverToBoxAdapter(child: LoadingWidget()),
-            error: (error, _) => SliverToBoxAdapter(
-              child: AppErrorWidget(
-                message: error.toString(),
-                onRetry: () => ref.invalidate(
-                  membersNotifierProvider(widget.householdId),
-                ),
-              ),
-            ),
-            data: (members) => SliverList.builder(
-              itemCount: members.length,
-              itemBuilder: (context, index) {
-                final member = members[index];
-                return MemberTile(
-                  key: Key('member_tile_${member.userId}'),
-                  member: member,
-                  householdId: widget.householdId,
-                  currentUserId: currentUserId,
-                );
-              },
-            ),
-          ),
-
-          // ------------------------------------------------------------------
-          // Section 3 — Invite
-          // ------------------------------------------------------------------
-          const SliverToBoxAdapter(
-            child: _SectionHeader(title: 'Invite'),
-          ),
-          SliverToBoxAdapter(
-            child: Card(
-              margin:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: ListTile(
-                key: const Key('invite_tile'),
-                leading: const Icon(Icons.person_add_rounded),
-                title: const Text('Invite member'),
-                subtitle: const Text('Generate an invite link'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: _generateInvite,
-              ),
-            ),
-          ),
-
-          // ------------------------------------------------------------------
-          // Section 4 — Danger zone
-          // ------------------------------------------------------------------
-          const SliverToBoxAdapter(
-            child: _SectionHeader(title: 'Danger Zone'),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Card(
-                margin: EdgeInsets.zero,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(
-                    color: Theme.of(context).colorScheme.error,
-                    width: 1.5,
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Leaving removes your access to all chores and '
-                        'data in this household.',
-                        style:
-                            Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Colors.grey.shade600,
-                                ),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        key: const Key('leave_household_button'),
-                        onPressed: _confirmLeave,
-                        style: TextButton.styleFrom(
-                          foregroundColor:
-                              Theme.of(context).colorScheme.error,
+      backgroundColor: _bgPage,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            _buildHeader(context),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(22, 20, 22, 40),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _HeroCard(
+                      household: household,
+                      members: members,
+                      isEditingName: _isEditingName,
+                      nameController: _nameController,
+                      onStartEdit: () {
+                        _nameController.text = household.name;
+                        setState(() => _isEditingName = true);
+                      },
+                      onSaveEdit: () async {
+                        final newName = _nameController.text.trim();
+                        if (newName.isNotEmpty && newName != household.name) {
+                          await ref
+                              .read(householdsNotifierProvider.notifier)
+                              .updateHouseholdName(widget.householdId, newName);
+                        }
+                        setState(() => _isEditingName = false);
+                      },
+                      onCancelEdit: () =>
+                          setState(() => _isEditingName = false),
+                    ),
+                    const SizedBox(height: 26),
+                    membersAsync.when(
+                      loading: () => const LoadingWidget(),
+                      error: (error, _) => AppErrorWidget(
+                        message: error.toString(),
+                        onRetry: () => ref.invalidate(
+                          membersNotifierProvider(widget.householdId),
                         ),
-                        child: const Text('Leave household'),
+                      ),
+                      data: (memberList) => _MembersSection(
+                        members: memberList,
+                        householdId: widget.householdId,
+                        currentUserId: currentUserId,
+                        isAdmin: household.isAdmin,
+                      ),
+                    ),
+                    const SizedBox(height: 26),
+                    _buildInviteSection(),
+                    const SizedBox(height: 26),
+                    _buildDangerZone(),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFEEF3F2))),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => context.pop(),
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFFE6EDEC)),
+                color: Colors.white,
+              ),
+              child: const Icon(
+                Icons.chevron_left_rounded,
+                size: 22,
+                color: _darkText,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Text(
+            'Manage Household',
+            style: TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w700,
+              color: _darkText,
+              letterSpacing: -0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInviteSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 11),
+          child: Text(
+            'INVITE',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: _secondaryText,
+              letterSpacing: 13 * 0.02,
+            ),
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: _borderCard),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: Column(
+            children: [
+              GestureDetector(
+                key: const Key('invite_tile'),
+                onTap: _toggleInvite,
+                child: Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD8F0EC),
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: const Icon(
+                          Icons.person_add_rounded,
+                          color: _teal,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Invite a housemate',
+                              style: TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w700,
+                                color: _darkText,
+                              ),
+                            ),
+                            SizedBox(height: 1),
+                            Text(
+                              'Share a link to add them',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w500,
+                                color: _secondaryText,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      AnimatedRotation(
+                        turns: _inviteOpen ? 0.25 : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: const Icon(
+                          Icons.chevron_right_rounded,
+                          size: 20,
+                          color: Color(0xFFB3C6C3),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
+              AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Column(
+                    children: [
+                      if (_inviteLoading)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: CircularProgressIndicator(
+                            color: _teal,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      else if (_inviteResponse != null) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF4F8F7),
+                            border:
+                                Border.all(color: const Color(0xFFE6EDEC)),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.link_rounded,
+                                size: 16,
+                                color: _secondaryText,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _inviteResponse!.inviteUrl,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF5B7A76),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 11),
+                        GestureDetector(
+                          onTap: _copyInviteLink,
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: _copied
+                                  ? const Color(0xFF15A394)
+                                  : _teal,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _copied
+                                      ? Icons.check_rounded
+                                      : Icons.copy_rounded,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _copied ? 'Link copied!' : 'Copy invite link',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                crossFadeState: _inviteOpen
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 200),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDangerZone() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(left: 4, bottom: 11),
+          child: Text(
+            'DANGER ZONE',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFFC98A8A),
+              letterSpacing: 13 * 0.02,
             ),
           ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: const Color(0xFFF3DADA)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFDEAEA),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Color(0xFFDC4D4D),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Leave household',
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w700,
+                            color: _darkText,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          "You'll lose access to all chores, points, and history.",
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF9A8585),
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 15),
+              GestureDetector(
+                key: const Key('leave_household_button'),
+                onTap: _confirmLeave,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(
+                      color: const Color(0xFFF0C4C4),
+                      width: 1.5,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Leave household',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFFDC4D4D),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
 
-          const SliverToBoxAdapter(child: SizedBox(height: 32)),
+// ---------------------------------------------------------------------------
+// Hero card
+// ---------------------------------------------------------------------------
+
+class _HeroCard extends StatelessWidget {
+  const _HeroCard({
+    required this.household,
+    required this.members,
+    required this.isEditingName,
+    required this.nameController,
+    required this.onStartEdit,
+    required this.onSaveEdit,
+    required this.onCancelEdit,
+  });
+
+  final HouseholdModel household;
+  final List<MemberModel> members;
+  final bool isEditingName;
+  final TextEditingController nameController;
+  final VoidCallback onStartEdit;
+  final VoidCallback onSaveEdit;
+  final VoidCallback onCancelEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final outlineBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(11),
+      borderSide: BorderSide(
+        color: Colors.white.withValues(alpha: 0.45),
+        width: 1.5,
+      ),
+    );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _teal,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0xB20D9488),
+            blurRadius: 30,
+            offset: Offset(0, 16),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.home_rounded,
+                  size: 26,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: isEditingName
+                    ? TextField(
+                        key: const Key('household_name_field'),
+                        controller: nameController,
+                        autofocus: true,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 18,
+                        ),
+                        decoration: InputDecoration(
+                          border: outlineBorder,
+                          enabledBorder: outlineBorder,
+                          focusedBorder: outlineBorder,
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.16),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          isDense: true,
+                        ),
+                      )
+                    : Column(
+                        key: const Key('household_name_tile'),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            household.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 22,
+                              color: Colors.white,
+                              height: 1.1,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Created ${DateFormat("MMM yyyy").format(household.createdAt)}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+              const SizedBox(width: 8),
+              if (!isEditingName)
+                GestureDetector(
+                  onTap: onStartEdit,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(
+                      Icons.edit_rounded,
+                      size: 18,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (isEditingName) ...[
+            const SizedBox(height: 13),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onSaveEdit,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: const Text(
+                        'Save',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: _teal,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onCancelEdit,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.45),
+                          width: 1.5,
+                        ),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (!isEditingName) ...[
+            const SizedBox(height: 16),
+            Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                _MemberAvatarStack(members: members),
+                const SizedBox(width: 14),
+                Text(
+                  '${members.length} members',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -356,25 +809,446 @@ class _HouseholdManagementScreenState
 }
 
 // ---------------------------------------------------------------------------
-// Section header
+// Member avatar stack (hero card footer)
 // ---------------------------------------------------------------------------
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title});
+class _MemberAvatarStack extends StatelessWidget {
+  const _MemberAvatarStack({required this.members});
 
-  final String title;
+  final List<MemberModel> members;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
-      child: Text(
-        title,
-        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              color: Colors.grey.shade700,
-              fontWeight: FontWeight.w700,
+    final show = members.take(4).toList();
+    final extra = members.length - show.length;
+    final width = show.length * 20.0 + 8 + (extra > 0 ? 20.0 : 0.0);
+
+    return SizedBox(
+      height: 28,
+      width: width,
+      child: Stack(
+        children: [
+          ...show.asMap().entries.map(
+                (e) => Positioned(
+                  left: e.key * 20.0,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _avatarColor(e.value.displayName),
+                      border: Border.all(color: _teal, width: 2),
+                    ),
+                    child: Center(
+                      child: Text(
+                        e.value.displayName[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          if (extra > 0)
+            Positioned(
+              left: show.length * 20.0,
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.22),
+                  border: Border.all(color: _teal, width: 2),
+                ),
+                child: Center(
+                  child: Text(
+                    '+$extra',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
             ),
+        ],
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Members section
+// ---------------------------------------------------------------------------
+
+class _MembersSection extends StatelessWidget {
+  const _MembersSection({
+    required this.members,
+    required this.householdId,
+    required this.currentUserId,
+    required this.isAdmin,
+  });
+
+  final List<MemberModel> members;
+  final String householdId;
+  final String? currentUserId;
+  final bool isAdmin;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 11),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'MEMBERS',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: _secondaryText,
+                  letterSpacing: 13 * 0.02,
+                ),
+              ),
+              Text(
+                '${members.length}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFFB3C6C3),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: _borderCard),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: List.generate(
+                members.length,
+                (i) => _MemberRow(
+                  member: members[i],
+                  index: i,
+                  householdId: householdId,
+                  currentUserId: currentUserId,
+                  canManage: isAdmin && members[i].userId != currentUserId,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Member row
+// ---------------------------------------------------------------------------
+
+class _MemberRow extends ConsumerWidget {
+  const _MemberRow({
+    required this.member,
+    required this.index,
+    required this.householdId,
+    required this.currentUserId,
+    required this.canManage,
+  });
+
+  final MemberModel member;
+  final int index;
+  final String householdId;
+  final String? currentUserId;
+  final bool canManage;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        border: index == 0
+            ? null
+            : const Border(top: BorderSide(color: Color(0xFFF1F5F4))),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _avatarColor(member.displayName),
+            ),
+            child: Center(
+              child: Text(
+                member.displayName[0].toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        member.displayName,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w700,
+                          color: _darkText,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (member.userId == currentUserId) ...[
+                      const SizedBox(width: 7),
+                      const _YouPill(),
+                    ],
+                    const SizedBox(width: 7),
+                    _RolePill(
+                      isAdmin: member.isAdmin,
+                      userId: member.userId,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Joined ${DateFormat("MMM yyyy").format(member.joinedAt)}',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: _secondaryText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (canManage)
+            GestureDetector(
+              onTap: () =>
+                  _showMemberActions(context, ref, member, householdId),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF4F8F7),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: const Icon(
+                  Icons.more_horiz_rounded,
+                  size: 18,
+                  color: _secondaryText,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// YOU pill
+// ---------------------------------------------------------------------------
+
+class _YouPill extends StatelessWidget {
+  const _YouPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: _teal,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Text(
+        'YOU',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.36,
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Role pill
+// ---------------------------------------------------------------------------
+
+class _RolePill extends StatelessWidget {
+  const _RolePill({required this.isAdmin, required this.userId});
+
+  final bool isAdmin;
+  final String userId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: Key(
+        isAdmin ? 'role_badge_admin_$userId' : 'role_badge_member_$userId',
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: isAdmin ? const Color(0xFFFEF3C7) : const Color(0xFFF1F6F5),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        isAdmin ? 'ADMIN' : 'MEMBER',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: isAdmin
+              ? const Color(0xFF92600A)
+              : const Color(0xFF8AA19E),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Member actions bottom sheet
+// ---------------------------------------------------------------------------
+
+void _showMemberActions(
+  BuildContext context,
+  WidgetRef ref,
+  MemberModel member,
+  String householdId,
+) {
+  showModalBottomSheet<void>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          ListTile(
+            key: const Key('change_role_action'),
+            leading: Icon(
+              member.isAdmin
+                  ? Icons.person_rounded
+                  : Icons.admin_panel_settings_rounded,
+              color: _teal,
+            ),
+            title: Text(
+              member.isAdmin ? 'Change to Member' : 'Change to Admin',
+            ),
+            onTap: () async {
+              Navigator.pop(context);
+              try {
+                await ref
+                    .read(membersNotifierProvider(householdId).notifier)
+                    .changeRole(
+                      member.userId,
+                      member.isAdmin ? 'member' : 'admin',
+                    );
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed: $e')),
+                  );
+                }
+              }
+            },
+          ),
+          ListTile(
+            key: const Key('remove_member_action'),
+            leading:
+                const Icon(Icons.person_remove_rounded, color: Colors.red),
+            title: const Text(
+              'Remove from household',
+              style: TextStyle(color: Colors.red),
+            ),
+            onTap: () async {
+              Navigator.pop(context);
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Remove member'),
+                  content: Text(
+                    'Remove ${member.displayName} from the household?',
+                  ),
+                  actions: [
+                    TextButton(
+                      key: const Key('remove_cancel_button'),
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      key: const Key('remove_confirm_button'),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.red,
+                      ),
+                      child: const Text('Remove'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed != true || !context.mounted) return;
+              try {
+                await ref
+                    .read(membersNotifierProvider(householdId).notifier)
+                    .removeMember(member.userId);
+              } on SoleAdminException {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      key: const Key('sole_admin_snackbar'),
+                      content: const Text('Cannot remove the sole admin.'),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed: $e')),
+                  );
+                }
+              }
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
 }
