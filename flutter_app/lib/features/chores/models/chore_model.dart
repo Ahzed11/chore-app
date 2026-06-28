@@ -26,6 +26,17 @@ const categoryLabels = {
   'other_general': 'Other',
 };
 
+const Map<String, Color> categoryColors = {
+  'kitchen': Color(0xFF14B8A6),
+  'bathroom': Color(0xFF0EA5E9),
+  'bedroom': Color(0xFF8B5CF6),
+  'living_room': Color(0xFF8B5CF6),
+  'laundry_room': Color(0xFF0EA5E9),
+  'garden_outdoor': Color(0xFF22C55E),
+  'garage': Color(0xFF6B7280),
+  'other_general': Color(0xFF9CA3AF),
+};
+
 /// Points awarded per effort level.
 const effortPoints = {
   'easy': 10,

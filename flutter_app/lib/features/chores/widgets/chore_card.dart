@@ -3,6 +3,24 @@ import 'package:flutter/material.dart';
 import '../models/chore_model.dart';
 
 // ---------------------------------------------------------------------------
+// Avatar colour palette
+// ---------------------------------------------------------------------------
+
+const List<Color> _avatarColors = [
+  Color(0xFF14B8A6),
+  Color(0xFF0EA5E9),
+  Color(0xFF8B5CF6),
+  Color(0xFF22C55E),
+  Color(0xFFF472B6),
+  Color(0xFFF97316),
+];
+
+Color _colorForName(String name) {
+  if (name.isEmpty) return _avatarColors[0];
+  return _avatarColors[name.codeUnitAt(0) % _avatarColors.length];
+}
+
+// ---------------------------------------------------------------------------
 // ChoreCard
 // ---------------------------------------------------------------------------
 
@@ -20,129 +38,138 @@ class ChoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final statusColor = chore.statusColor;
-    final catIcon = categoryIcons[chore.category] ?? Icons.home_repair_service;
-    final catLabel =
-        categoryLabels[chore.category] ?? chore.category;
-    final dueDateStr = _formatDate(chore.dueDate);
+    final catColor =
+        categoryColors[chore.category] ?? const Color(0xFF9CA3AF);
+    final catLabel = categoryLabels[chore.category] ?? chore.category;
+    final isRecurring = chore.choreType == 'recurring';
+    final isComplete = chore.status == 'complete';
+    final isOverdue = chore.isOverdue;
 
-    final effortLabel =
-        '${_capitalize(chore.effortLevel)} ${chore.pointValue}pts';
-
-    Widget card = Card(
+    Widget card = Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      clipBehavior: Clip.antiAlias,
-      child: IntrinsicHeight(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFEBF1F0)),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Status border indicator
-            Container(
-              width: 5,
-              decoration: BoxDecoration(color: statusColor),
-            ),
-            // Card content
+            // ---- Status circle ----
+            _StatusCircle(isComplete: isComplete, isOverdue: isOverdue),
+
+            const SizedBox(width: 14),
+
+            // ---- Content ----
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Category row
-                    Row(
-                      children: [
-                        Icon(catIcon,
-                            size: 16,
-                            color: theme.colorScheme.primary),
-                        const SizedBox(width: 4),
-                        Text(
-                          catLabel,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Category row
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: catColor,
+                          shape: BoxShape.circle,
                         ),
-                        const Spacer(),
-                        // Effort chip
-                        Chip(
-                          key: Key('effort_chip_${chore.id}'),
-                          label: Text(effortLabel),
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          labelStyle: theme.textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                          backgroundColor:
-                              _effortChipColor(chore.effortLevel),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    // Title
-                    Text(
-                      chore.title,
-                      key: Key('chore_title_${chore.id}'),
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    // Assignee + due date row
-                    Row(
-                      children: [
-                        // Assignee
-                        Icon(
-                          Icons.person_outline,
-                          size: 14,
-                          color: chore.assigneeName != null
-                              ? theme.colorScheme.onSurface
-                              : Colors.grey,
+                      const SizedBox(width: 4),
+                      Text(
+                        catLabel,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF8AA19E),
                         ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            chore.assigneeName ?? 'Unassigned',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: chore.assigneeName != null
-                                  ? null
-                                  : Colors.grey,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                      ),
+                      if (isRecurring) ...[
+                        const SizedBox(width: 6),
+                        const Icon(
+                          Icons.refresh_rounded,
+                          size: 13,
+                          color: Color(0xFFB3C6C3),
                         ),
-                        const SizedBox(width: 8),
-                        // Due date
-                        Icon(
-                          Icons.calendar_today,
-                          size: 14,
-                          color: chore.isOverdue
-                              ? Colors.red
-                              : theme.colorScheme.onSurface,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          dueDateStr,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: chore.isOverdue ? Colors.red : null,
-                            fontWeight: chore.isOverdue
-                                ? FontWeight.w700
-                                : null,
-                          ),
-                        ),
-                        if (chore.isOverdue) ...[
-                          const SizedBox(width: 4),
-                          const Icon(
-                            Icons.warning_amber_rounded,
-                            key: Key('overdue_warning_icon'),
-                            size: 16,
-                            color: Colors.red,
-                          ),
-                        ],
                       ],
+                    ],
+                  ),
+
+                  const SizedBox(height: 5),
+
+                  // Title
+                  Text(
+                    chore.title,
+                    key: Key('chore_title_${chore.id}'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: isComplete
+                          ? const Color(0xFF8AA19E)
+                          : const Color(0xFF0F2E2C),
+                      decoration:
+                          isComplete ? TextDecoration.lineThrough : null,
+                      decorationColor: const Color(0xFF8AA19E),
                     ),
-                  ],
-                ),
+                  ),
+
+                  const SizedBox(height: 7),
+
+                  // Assignee + due date row
+                  Row(
+                    children: [
+                      _MiniAvatar(
+                        name: chore.assigneeName ?? '?',
+                      ),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          chore.assigneeName ?? 'Unassigned',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF8AA19E),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        '·',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF8AA19E),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _formatDate(chore.dueDate),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: isOverdue
+                              ? const Color(0xFFF87171)
+                              : const Color(0xFF8AA19E),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(width: 10),
+
+            // ---- Points ----
+            Text(
+              '+${chore.pointValue}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF0D9488),
               ),
             ),
           ],
@@ -150,7 +177,6 @@ class ChoreCard extends StatelessWidget {
       ),
     );
 
-    // Wrap with long-press gesture for admin actions
     if (isAdmin) {
       card = GestureDetector(
         onLongPress: () => _showAdminMenu(context),
@@ -166,48 +192,48 @@ class ChoreCard extends StatelessWidget {
   // ---------------------------------------------------------------------------
 
   void _showAdminMenu(BuildContext context) {
-    final RenderBox renderBox = context.findRenderObject()! as RenderBox;
-    final offset = renderBox.localToGlobal(Offset.zero);
-    final size = renderBox.size;
-
-    showMenu<String>(
+    showModalBottomSheet<void>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        offset.dx,
-        offset.dy + size.height * 0.5,
-        offset.dx + size.width,
-        offset.dy + size.height,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      items: [
-        const PopupMenuItem<String>(
-          key: Key('delete_series_menu_item'),
-          value: 'delete',
-          child: Row(
-            children: [
-              Icon(Icons.delete_outline, color: Colors.red),
-              SizedBox(width: 8),
-              Text('Delete series', style: TextStyle(color: Colors.red)),
-            ],
-          ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              key: const Key('delete_series_menu_item'),
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text(
+                'Delete series',
+                style: TextStyle(color: Colors.red),
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                onDeleteSeries?.call();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
-      ],
-    ).then((value) {
-      if (value == 'delete') {
-        onDeleteSeries?.call();
-      }
-    });
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
-  String _capitalize(String s) {
-    if (s.isEmpty) return s;
-    return s[0].toUpperCase() + s.substring(1);
-  }
-
-  /// Formats a date as "Jun 25" without requiring the intl package.
   String _formatDate(DateTime date) {
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -215,16 +241,76 @@ class ChoreCard extends StatelessWidget {
     ];
     return '${months[date.month - 1]} ${date.day}';
   }
+}
 
-  Color _effortChipColor(String effortLevel) {
-    switch (effortLevel) {
-      case 'hard':
-        return const Color(0xFFFFCDD2); // light red
-      case 'medium':
-        return const Color(0xFFFFF9C4); // light yellow
-      case 'easy':
-      default:
-        return const Color(0xFFC8E6C9); // light green
-    }
+// ---------------------------------------------------------------------------
+// Status circle
+// ---------------------------------------------------------------------------
+
+class _StatusCircle extends StatelessWidget {
+  const _StatusCircle({required this.isComplete, required this.isOverdue});
+
+  final bool isComplete;
+  final bool isOverdue;
+
+  @override
+  Widget build(BuildContext context) {
+    const teal = Color(0xFF0D9488);
+    const borderIdle = Color(0xFFD4E0DF);
+    const borderOverdue = Color(0xFFF87171);
+
+    final borderColor =
+        isComplete ? teal : (isOverdue ? borderOverdue : borderIdle);
+    final fillColor = isComplete ? teal : Colors.transparent;
+
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: fillColor,
+        border: Border.all(color: borderColor, width: 2),
+      ),
+      child: isComplete
+          ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+          : isOverdue
+              ? Icon(
+                  Icons.priority_high,
+                  size: 14,
+                  color: Colors.red.shade400,
+                )
+              : null,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mini avatar (18×18)
+// ---------------------------------------------------------------------------
+
+class _MiniAvatar extends StatelessWidget {
+  const _MiniAvatar({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    final color = _colorForName(name);
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: Center(
+        child: Text(
+          initial,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
   }
 }
