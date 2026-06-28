@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Backend tests & coverage
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: choreapp
+          POSTGRES_PASSWORD: choreapp_test
+          POSTGRES_DB: choreapp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run tests with coverage
+        env:
+          # Used by app.core.config.Settings at import time.
+          DATABASE_URL: postgresql+asyncpg://choreapp:choreapp_test@localhost:5432/choreapp_test
+          # Used by all test fixtures to create the test engine.
+          TEST_DATABASE_URL: postgresql+asyncpg://choreapp:choreapp_test@localhost:5432/choreapp_test
+          JWT_SECRET: ci_jwt_secret_not_used_in_production
+          JWT_ALGORITHM: HS256
+          JWT_EXPIRY_DAYS: "7"
+          APP_BASE_URL: http://localhost:8000
+        run: >-
+          uv run pytest tests/
+          --cov=app
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          -v
+
+      - name: Upload coverage XML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/coverage.xml
+          if-no-files-found: warn
