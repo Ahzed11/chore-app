@@ -23,8 +23,22 @@ class MyChoresScreen extends ConsumerStatefulWidget {
   ConsumerState<MyChoresScreen> createState() => _MyChoresScreenState();
 }
 
-class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
-  static const int _tabIndex = 1;
+class _MyChoresScreenState extends ConsumerState<MyChoresScreen>
+    with SingleTickerProviderStateMixin {
+  static const int _navIndex = 1;
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,9 +51,22 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('My Chores')),
-      bottomNavigationBar: _MyChoresBottomNav(
-        householdId: widget.householdId,
-        currentIndex: _tabIndex,
+      // Tab selector sits above the main nav bar, always reachable at the bottom.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TabBar(
+            controller: _tabController,
+            tabs: const [
+              Tab(icon: Icon(Icons.checklist_rounded), text: 'To Do'),
+              Tab(icon: Icon(Icons.check_circle_rounded), text: 'Done'),
+            ],
+          ),
+          _MyChoresBottomNav(
+            householdId: widget.householdId,
+            currentIndex: _navIndex,
+          ),
+        ],
       ),
       body: choresAsync.when(
         loading: () => const LoadingWidget(message: 'Loading your chores...'),
@@ -50,97 +77,69 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
               .refresh(),
         ),
         data: (allChores) {
-          // Filter to current user's assigned chores only.
           final myChores = currentUserId == null
               ? <ChoreModel>[]
               : allChores
-                  .where((c) => c.assigneeId == currentUserId && c.status != 'cancelled')
+                  .where((c) =>
+                      c.assigneeId == currentUserId && c.status != 'cancelled')
                   .toList();
 
-          final sorted = _sortChores(myChores);
+          // Split into two independent lists.
+          final overdue = myChores.where((c) => c.isOverdue).toList()
+            ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+          final pending = myChores
+              .where((c) => c.status == 'pending' && !c.isOverdue)
+              .toList()
+            ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+          final todo = [...overdue, ...pending];
 
-          // Compute all-time points from completed chores (client-side).
-          final totalPoints = myChores
-              .where((c) => c.status == 'complete')
-              .fold<int>(0, (sum, c) => sum + (c.pointsAwarded ?? 0));
+          final done = myChores.where((c) => c.status == 'complete').toList()
+            ..sort((a, b) => (b.completedAt ?? b.dueDate)
+                .compareTo(a.completedAt ?? a.dueDate));
 
-          return RefreshIndicator(
-            onRefresh: () => ref
-                .read(choresNotifierProvider(widget.householdId).notifier)
-                .refresh(),
-            child: CustomScrollView(
-              slivers: [
-                // Points banner always visible at the top.
-                SliverToBoxAdapter(
-                  child: _PointsBanner(points: totalPoints),
+          final totalPoints = done.fold<int>(
+              0, (sum, c) => sum + (c.pointsAwarded ?? 0));
+
+          return Column(
+            children: [
+              _PointsBanner(points: totalPoints),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    // ---- To Do tab ----
+                    _buildRefreshable(
+                      child: todo.isEmpty
+                          ? _AllDoneState()
+                          : _ChoreList(
+                              chores: todo,
+                              onMarkDone: (chore) =>
+                                  _confirmComplete(context, chore),
+                            ),
+                    ),
+                    // ---- Done tab ----
+                    _buildRefreshable(
+                      child: done.isEmpty
+                          ? const _EmptyDoneState()
+                          : _ChoreList(chores: done),
+                    ),
+                  ],
                 ),
-
-                if (sorted.isEmpty)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(
-                      child: Text(
-                        key: Key('empty_state_my_chores'),
-                        'No chores assigned to you yet.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.only(bottom: 80, top: 4),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final chore = sorted[index];
-                          final isActionable = chore.status == 'pending' ||
-                              chore.status == 'overdue';
-                          return _MyChoreCard(
-                            key: Key('my_chore_card_${chore.id}'),
-                            chore: chore,
-                            onMarkDone: isActionable
-                                ? () => _confirmComplete(context, chore)
-                                : null,
-                          );
-                        },
-                        childCount: sorted.length,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+              ),
+            ],
           );
         },
       ),
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Sort: overdue (due_date ASC) → pending (due_date ASC) → complete
-  //       (completedAt DESC) → others
-  // ---------------------------------------------------------------------------
-
-  List<ChoreModel> _sortChores(List<ChoreModel> chores) {
-    final overdue = chores.where((c) => c.isOverdue).toList()
-      ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
-
-    final pending = chores
-        .where((c) => c.status == 'pending' && !c.isOverdue)
-        .toList()
-      ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
-
-    final complete = chores.where((c) => c.status == 'complete').toList()
-      ..sort((a, b) => (b.completedAt ?? b.dueDate)
-          .compareTo(a.completedAt ?? a.dueDate));
-
-    final others = chores
-        .where((c) =>
-            !c.isOverdue &&
-            c.status != 'pending' &&
-            c.status != 'complete')
-        .toList();
-
-    return [...overdue, ...pending, ...complete, ...others];
+  Widget _buildRefreshable({required Widget child}) {
+    return RefreshIndicator(
+      onRefresh: () => ref
+          .read(choresNotifierProvider(widget.householdId).notifier)
+          .refresh(),
+      child: child,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -151,6 +150,8 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
     BuildContext context,
     ChoreModel chore,
   ) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -161,8 +162,6 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
     );
 
     if (confirmed != true || !mounted) return;
-
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
       await ref
@@ -193,6 +192,97 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
         ),
       );
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chore list — shared by both tabs
+// ---------------------------------------------------------------------------
+
+class _ChoreList extends StatelessWidget {
+  const _ChoreList({required this.chores, this.onMarkDone});
+
+  final List<ChoreModel> chores;
+  final void Function(ChoreModel)? onMarkDone;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 16, top: 4),
+      itemCount: chores.length,
+      itemBuilder: (context, index) {
+        final chore = chores[index];
+        return _MyChoreCard(
+          key: Key('my_chore_card_${chore.id}'),
+          chore: chore,
+          onMarkDone: onMarkDone != null ? () => onMarkDone!(chore) : null,
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Empty states
+// ---------------------------------------------------------------------------
+
+class _AllDoneState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListView(
+      children: [
+        SizedBox(
+          height: 340,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('🎉', style: TextStyle(fontSize: 72)),
+              const SizedBox(height: 16),
+              Text(
+                'All caught up!',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'No chores left to do.\nEnjoy your well-deserved break!',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey.shade500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmptyDoneState extends StatelessWidget {
+  const _EmptyDoneState();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        SizedBox(
+          height: 340,
+          child: Center(
+            child: Text(
+              key: const Key('empty_done_chores'),
+              'No completed chores yet.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.grey.shade500,
+                  ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
