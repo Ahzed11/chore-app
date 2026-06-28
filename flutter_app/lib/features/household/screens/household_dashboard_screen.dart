@@ -81,161 +81,10 @@ class HouseholdDashboardScreen extends ConsumerWidget {
   }
 
   Future<void> _showJoinDialog(BuildContext context, WidgetRef ref) async {
-    final tokenController = TextEditingController();
-    bool isLoading = false;
-
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            return AlertDialog(
-              title: const Text('Join by Invite Link'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Paste the invite link or token below.',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    key: const Key('invite_token_field'),
-                    controller: tokenController,
-                    decoration: const InputDecoration(
-                      labelText: 'Invite link or token',
-                      hintText: 'https://... or token',
-                      prefixIcon: Icon(Icons.link_rounded),
-                    ),
-                    autofocus: true,
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isLoading
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  key: const Key('join_household_submit_button'),
-                  onPressed: isLoading
-                      ? null
-                      : () async {
-                          final raw = tokenController.text.trim();
-                          if (raw.isEmpty) return;
-
-                          // Extract the last path segment as the token.
-                          final token = _extractToken(raw);
-                          setDialogState(() => isLoading = true);
-
-                          try {
-                            await ref
-                                .read(householdsNotifierProvider.notifier)
-                                .joinByToken(token);
-
-                            if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop();
-                            }
-
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  key: Key('join_success_snackbar'),
-                                  content: Text('Successfully joined household!'),
-                                ),
-                              );
-                            }
-                          } on InviteExpiredException {
-                            if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop();
-                            }
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  key: const Key('join_expired_snackbar'),
-                                  content: const Text(
-                                    'Invite link has expired or has already been used.',
-                                  ),
-                                  backgroundColor:
-                                      Theme.of(context).colorScheme.error,
-                                ),
-                              );
-                            }
-                          } on AlreadyMemberException {
-                            if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop();
-                            }
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  key: const Key('join_already_member_snackbar'),
-                                  content: const Text(
-                                    'You are already a member of this household.',
-                                  ),
-                                  backgroundColor:
-                                      Theme.of(context).colorScheme.error,
-                                ),
-                              );
-                            }
-                          } catch (e) {
-                            if (dialogContext.mounted) {
-                              setDialogState(() => isLoading = false);
-                            }
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(e.toString()),
-                                  backgroundColor:
-                                      Theme.of(context).colorScheme.error,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                  child: isLoading
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('Join'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (_) => _JoinHouseholdDialog(parentContext: context),
     );
-
-    tokenController.dispose();
-  }
-
-  /// Extracts the token from a URL or returns the raw value as-is.
-  ///
-  /// For a URL like `https://example.com/invites/abc123/accept`,
-  /// this returns `abc123`.
-  String _extractToken(String raw) {
-    try {
-      final uri = Uri.tryParse(raw);
-      if (uri != null && uri.pathSegments.isNotEmpty) {
-        // Filter out empty and common suffix segments like "accept".
-        final segments = uri.pathSegments
-            .where((s) => s.isNotEmpty && s != 'accept')
-            .toList();
-        if (segments.isNotEmpty) {
-          return segments.last;
-        }
-      }
-    } catch (_) {
-      // fall through to raw value
-    }
-    return raw;
   }
 }
 
@@ -289,5 +138,162 @@ class _EmptyState extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Join-by-invite dialog — owns its own TextEditingController lifecycle
+// ---------------------------------------------------------------------------
+
+class _JoinHouseholdDialog extends ConsumerStatefulWidget {
+  const _JoinHouseholdDialog({required this.parentContext});
+
+  final BuildContext parentContext;
+
+  @override
+  ConsumerState<_JoinHouseholdDialog> createState() =>
+      _JoinHouseholdDialogState();
+}
+
+class _JoinHouseholdDialogState extends ConsumerState<_JoinHouseholdDialog> {
+  late final TextEditingController _controller;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Join by Invite Link'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Paste the invite link or token below.',
+            style: TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            key: const Key('invite_token_field'),
+            controller: _controller,
+            decoration: const InputDecoration(
+              labelText: 'Invite link or token',
+              hintText: 'https://... or token',
+              prefixIcon: Icon(Icons.link_rounded),
+            ),
+            autofocus: true,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          key: const Key('join_household_submit_button'),
+          onPressed: _isLoading ? null : _submit,
+          child: _isLoading
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Join'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submit() async {
+    final raw = _controller.text.trim();
+    if (raw.isEmpty) return;
+
+    final token = _extractToken(raw);
+    setState(() => _isLoading = true);
+
+    try {
+      await ref
+          .read(householdsNotifierProvider.notifier)
+          .joinByToken(token);
+
+      if (mounted) Navigator.of(context).pop();
+
+      final parent = widget.parentContext;
+      if (parent.mounted) {
+        ScaffoldMessenger.of(parent).showSnackBar(
+          const SnackBar(
+            key: Key('join_success_snackbar'),
+            content: Text('Successfully joined household!'),
+          ),
+        );
+      }
+    } on InviteExpiredException {
+      if (mounted) Navigator.of(context).pop();
+      final parent = widget.parentContext;
+      if (parent.mounted) {
+        ScaffoldMessenger.of(parent).showSnackBar(
+          SnackBar(
+            key: const Key('join_expired_snackbar'),
+            content: const Text(
+              'Invite link has expired or has already been used.',
+            ),
+            backgroundColor: Theme.of(parent).colorScheme.error,
+          ),
+        );
+      }
+    } on AlreadyMemberException {
+      if (mounted) Navigator.of(context).pop();
+      final parent = widget.parentContext;
+      if (parent.mounted) {
+        ScaffoldMessenger.of(parent).showSnackBar(
+          SnackBar(
+            key: const Key('join_already_member_snackbar'),
+            content: const Text(
+              'You are already a member of this household.',
+            ),
+            backgroundColor: Theme.of(parent).colorScheme.error,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+      final parent = widget.parentContext;
+      if (parent.mounted) {
+        ScaffoldMessenger.of(parent).showSnackBar(
+          SnackBar(
+            content: Text(e.toString()),
+            backgroundColor: Theme.of(parent).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  String _extractToken(String raw) {
+    try {
+      final uri = Uri.tryParse(raw);
+      if (uri != null && uri.pathSegments.isNotEmpty) {
+        final segments = uri.pathSegments
+            .where((s) => s.isNotEmpty && s != 'accept')
+            .toList();
+        if (segments.isNotEmpty) return segments.last;
+      }
+    } catch (_) {}
+    return raw;
   }
 }
