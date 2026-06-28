@@ -270,9 +270,9 @@ class _HouseholdManagementScreenState
 
   Widget _buildHeader(BuildContext context) {
     return Container(
-      color: Colors.white,
       padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
       decoration: const BoxDecoration(
+        color: Colors.white,
         border: Border(bottom: BorderSide(color: Color(0xFFEEF3F2))),
       ),
       child: Row(
