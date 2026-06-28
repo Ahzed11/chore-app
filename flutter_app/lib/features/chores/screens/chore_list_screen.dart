@@ -207,6 +207,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   List<ChoreModel> _applyFilter(
       List<ChoreModel> chores, ChoreFilter filter) {
     return chores.where((c) {
+      if (c.status == 'cancelled') return false;
       if (filter.status != null && filter.status!.isNotEmpty) {
         if (c.status != filter.status) return false;
       }

@@ -95,14 +95,55 @@ class ChoresNotifier
 
   /// Marks a chore instance as complete.
   ///
-  /// Throws [DioException] on HTTP errors (403, 409, etc.) so callers can
-  /// surface appropriate messages to the user.
+  /// Uses an optimistic update for instant UI feedback. On failure the previous
+  /// state is restored and the error is rethrown so callers can surface
+  /// appropriate messages to the user.
   Future<void> completeChore(String instanceId) async {
     final householdId = arg;
     final dio = ref.read(dioProvider);
-    await dio.post<void>(ApiEndpoints.choreComplete(householdId, instanceId));
-    ref.invalidateSelf();
-    await future;
+
+    // Snapshot current state so we can revert on failure.
+    final previousState = state;
+
+    // Optimistic update: immediately show the chore as complete.
+    state = state.whenData((chores) => [
+      for (final c in chores)
+        if (c.id == instanceId)
+          ChoreModel(
+            id: c.id,
+            definitionId: c.definitionId,
+            householdId: c.householdId,
+            assigneeId: c.assigneeId,
+            assigneeName: c.assigneeName,
+            assignedManually: c.assignedManually,
+            dueDate: c.dueDate,
+            status: 'complete',
+            completedAt: DateTime.now(),
+            pointsAwarded: c.pointValue,
+            title: c.title,
+            description: c.description,
+            category: c.category,
+            effortLevel: c.effortLevel,
+            choreType: c.choreType,
+          )
+        else
+          c,
+    ]);
+
+    try {
+      final response = await dio.post<Map<String, dynamic>>(
+        ApiEndpoints.choreComplete(householdId, instanceId),
+      );
+      // Replace optimistic entry with the authoritative server response.
+      final updatedChore = ChoreModel.fromJson(response.data!);
+      state = state.whenData((chores) => [
+        for (final c in chores)
+          if (c.id == instanceId) updatedChore else c,
+      ]);
+    } catch (e) {
+      state = previousState; // revert on failure
+      rethrow;
+    }
   }
 
   /// Creates a new chore definition and its first instance. Admin only.

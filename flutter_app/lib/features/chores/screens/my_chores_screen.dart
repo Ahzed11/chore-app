@@ -54,7 +54,7 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
           final myChores = currentUserId == null
               ? <ChoreModel>[]
               : allChores
-                  .where((c) => c.assigneeId == currentUserId)
+                  .where((c) => c.assigneeId == currentUserId && c.status != 'cancelled')
                   .toList();
 
           final sorted = _sortChores(myChores);
