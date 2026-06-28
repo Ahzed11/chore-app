@@ -104,6 +104,18 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
         leading: BackButton(
           onPressed: () => context.go('/households'),
         ),
+        actions: [
+          if (isAdmin)
+            IconButton(
+              key: const Key('manage_members_button'),
+              icon: const Icon(Icons.group_rounded),
+              tooltip: 'Manage members',
+              onPressed: () => context.goNamed(
+                'household-manage',
+                pathParameters: {'householdId': widget.householdId},
+              ),
+            ),
+        ],
       ),
       floatingActionButton: isAdmin
           ? FloatingActionButton(

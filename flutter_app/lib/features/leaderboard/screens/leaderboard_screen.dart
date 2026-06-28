@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
+import '../../household/providers/household_provider.dart';
 import '../models/leaderboard_model.dart';
 import '../providers/leaderboard_provider.dart';
 import '../widgets/leaderboard_entry_tile.dart';
@@ -78,6 +79,13 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
     final leaderboardAsync =
         ref.watch(leaderboardProvider(widget.householdId));
     final currentUserId = ref.watch(currentUserIdProvider);
+    final bool isAdmin = ref
+            .watch(householdsNotifierProvider)
+            .valueOrNull
+            ?.where((h) => h.id == widget.householdId)
+            .firstOrNull
+            ?.isAdmin ??
+        false;
 
     // Keep tab in sync if scope was changed externally.
     final scopeIndex = _scopes.indexOf(scope);
@@ -86,7 +94,21 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen>
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Leaderboard')),
+      appBar: AppBar(
+        title: const Text('Leaderboard'),
+        actions: [
+          if (isAdmin)
+            IconButton(
+              key: const Key('manage_members_button'),
+              icon: const Icon(Icons.group_rounded),
+              tooltip: 'Manage members',
+              onPressed: () => context.goNamed(
+                AppRoutes.householdManage,
+                pathParameters: {'householdId': widget.householdId},
+              ),
+            ),
+        ],
+      ),
       // Tab selector sits above the main nav bar, always reachable at the bottom.
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
