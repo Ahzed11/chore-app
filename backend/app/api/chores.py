@@ -170,6 +170,7 @@ async def list_chores(
         .join(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
         .outerjoin(User, ChoreInstance.assignee_id == User.id)
         .where(ChoreInstance.household_id == household_id)
+        .where(ChoreDefinition.is_active == True)
     )
 
     if status_filter is not None:
