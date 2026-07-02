@@ -25,79 +25,14 @@ NOTE on scheduler recurrence_rule format:
     marks it overdue when the internal ``_today`` helper is monkeypatched to
     return a date in the future.
 """
-import os
-from collections.abc import AsyncGenerator
 from datetime import date, timedelta
 from typing import Any
 
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.base import Base
-from app.db.session import get_db
-from main import app
-
-
-# ---------------------------------------------------------------------------
-# Database URL helper
-# ---------------------------------------------------------------------------
-
-
-def _get_test_database_url() -> str:
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "TEST_DATABASE_URL environment variable is not set. "
-            "Please provide a PostgreSQL URL before running the test suite."
-        )
-    return url
-
-
-# ---------------------------------------------------------------------------
-# Shared fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture()
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """Yield an AsyncClient backed by a fresh, isolated test database.
-
-    Drops and recreates all tables before each test to guarantee a clean
-    starting state.  The ``get_db`` dependency is overridden so that every
-    HTTP request uses sessions bound to this test engine, not the one created
-    from ``settings.DATABASE_URL`` at module-import time.
-    """
-    url = _get_test_database_url()
-    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
-    session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        async with session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-    app.dependency_overrides.clear()
-    await engine.dispose()
+from tests.conftest import get_test_database_url as _get_test_database_url
 
 
 # ---------------------------------------------------------------------------

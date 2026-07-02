@@ -3,14 +3,11 @@
 A lightweight test-only router is mounted on the app for these tests so that
 there is no need to touch main.py.
 """
-import os
 import uuid
-from collections.abc import AsyncGenerator
 from datetime import timedelta
 
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -18,12 +15,11 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user, require_household_member
 from app.core.security import create_access_token
-from app.db.base import Base
-from app.db.session import get_db
 from app.models.household import Household
 from app.models.household_membership import HouseholdMembership
 from app.models.user import User
 from main import app
+from tests.conftest import get_test_database_url as _get_test_database_url
 
 # ---------------------------------------------------------------------------
 # Test-only router — not included in main.py
@@ -43,67 +39,6 @@ async def member_only_route(membership: HouseholdMembership = Depends(require_ho
 
 
 app.include_router(test_router)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _get_test_database_url() -> str:
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "TEST_DATABASE_URL environment variable is not set. "
-            "Please provide a PostgreSQL URL before running the test suite."
-        )
-    return url
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture()
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """Yield an AsyncClient wired to a fresh test database.
-
-    Each test gets a clean schema.  The ``get_db`` dependency is overridden
-    to use the same engine so that rows written via the client are visible
-    within the same test.
-    """
-    url = _get_test_database_url()
-    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
-
-    session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    # Fresh schema for every test.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        async with session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-    app.dependency_overrides.clear()
-    await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

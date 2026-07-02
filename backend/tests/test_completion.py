@@ -1,5 +1,4 @@
 """Tests for POST /households/{household_id}/chores/{instance_id}/complete (TASK-013)."""
-import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import date, datetime, timezone
@@ -21,17 +20,7 @@ from app.models.household_membership import HouseholdMembership
 from app.models.point_ledger import PointLedger
 from app.models.user import User
 from main import app
-
-
-# ---------------------------------------------------------------------------
-# Database URL helper
-# ---------------------------------------------------------------------------
-
-def _get_test_database_url() -> str:
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        raise RuntimeError("TEST_DATABASE_URL environment variable is not set.")
-    return url
+from tests.conftest import get_test_database_url as _get_test_database_url
 
 
 def _get_session_factory() -> async_sessionmaker:

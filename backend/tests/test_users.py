@@ -1,59 +1,6 @@
 """Tests for GET /users/me and PATCH /users/me (TASK-006)."""
-import os
-from collections.abc import AsyncGenerator
-
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.db.base import Base
-from app.db.session import get_db
-from main import app
-
-
-def _get_test_database_url() -> str:
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        raise RuntimeError(
-            "TEST_DATABASE_URL environment variable is not set. "
-            "Please provide a PostgreSQL URL before running the test suite."
-        )
-    return url
-
-
-@pytest_asyncio.fixture()
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """AsyncClient backed by a fresh test database."""
-    url = _get_test_database_url()
-    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
-    session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        async with session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-    app.dependency_overrides.clear()
-    await engine.dispose()
+from httpx import AsyncClient
 
 
 # ---------------------------------------------------------------------------
