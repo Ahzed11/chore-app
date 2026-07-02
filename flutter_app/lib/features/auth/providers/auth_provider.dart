@@ -52,8 +52,10 @@ class AuthFormNotifier extends Notifier<AuthFormState> {
         },
       );
 
-      final token = response.data!['access_token'] as String;
+      final data = response.data!;
+      final token = data['access_token'] as String;
       await ref.read(authNotifierProvider.notifier).saveToken(token);
+      await AuthStorage.saveRefreshToken(data['refresh_token'] as String);
 
       state = const AuthFormState(); // reset
       return true;
