@@ -799,15 +799,17 @@ async def test_remove_last_member_sets_assignee_to_none(async_client: AsyncClien
     )
     assert leave_resp.status_code == 204
 
-    # The chore should now have assignee_id=None because no members remain.
-    # Alice's JWT is still valid (her User record exists); the GET /chores endpoint
-    # only requires get_current_user (not household membership).
-    chore_resp = await async_client.get(
-        f"/households/{household_id}/chores/{instance_id}",
-        headers=_auth(alice_token),
-    )
-    assert chore_resp.status_code == 200
-    assert chore_resp.json()["assignee_id"] is None
+    # Verify assignee_id=None via a direct DB query — both Alice and Bob are now
+    # inactive members, so neither can pass require_household_member on the API.
+    engine2 = create_async_engine(_get_test_database_url(), echo=False, pool_pre_ping=True)
+    sf2 = async_sessionmaker(bind=engine2, class_=AsyncSession, expire_on_commit=False)
+    async with sf2() as session:
+        result = await session.execute(
+            select(ChoreInstance).where(ChoreInstance.id == uuid.UUID(instance_id))
+        )
+        instance = result.scalar_one()
+        assert instance.assignee_id is None
+    await engine2.dispose()
 
 
 @pytest.mark.asyncio

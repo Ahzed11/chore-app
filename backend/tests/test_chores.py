@@ -111,6 +111,13 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
+    # Seed the fake admin so created_by_id FK references are valid.
+    # Use a fresh ORM instance — the module-level fake_admin object must not be
+    # reused across fixtures or SQLAlchemy will try to UPDATE rather than INSERT.
+    async with session_factory() as session:
+        session.add(User(id=_ADMIN_ID, email="admin@test.com", display_name="Admin", password_hash="x"))
+        await session.commit()
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
             try:
