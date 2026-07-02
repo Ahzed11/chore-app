@@ -315,7 +315,7 @@ async def test_flow2_recurring_chore_scheduler(
             "effort_level": "easy",
             "chore_type": "recurring",
             "first_due_date": str(today),
-            "recurrence_rule": {"unit": "weeks", "interval": 1},
+            "recurrence_rule": {"interval_unit": "weeks", "interval_n": 1},
         },
         headers=_auth(alice_token),
     )

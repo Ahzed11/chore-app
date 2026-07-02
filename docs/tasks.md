@@ -774,6 +774,435 @@ Include a `Makefile` (or `justfile`) with common commands: `make up`, `make down
 
 ---
 
+## TASK-028: Backend — Security: Purge Committed Credentials
+
+**Domain**: Backend / DevOps  
+**Priority**: CRITICAL — do before any deployment  
+**Depends on**: none  
+**Source**: `docs/backend-report.md` SEC-001, SEC-002
+
+`backend/.env` is committed to git (it is absent from `.gitignore`) and contains a live `DATABASE_URL` and a `JWT_SECRET`. `docker-compose.yml` also hardcodes credentials inline. Both secrets are low-entropy human-readable strings.
+
+**Steps**:
+1. Add `.env` to `backend/.gitignore`.
+2. Use BFG Repo-Cleaner or `git filter-branch` to remove `.env` from the full git history.
+3. Rotate the PostgreSQL password and generate a new `JWT_SECRET` with `python -c "import secrets; print(secrets.token_hex(32))"`.
+4. Replace inline secrets in `docker-compose.yml` with `env_file: ./backend/.env` so no credentials live in a tracked file.
+5. Add a startup validation in `app/core/config.py` that raises on startup if `JWT_SECRET` is shorter than 32 characters or matches any known placeholder string.
+6. Add `trufflehog` or `git-secrets` as a pre-commit hook or CI step to block future leaks.
+
+**Acceptance criteria**:
+- [ ] `.env` is excluded from git and absent from git history.
+- [ ] `docker-compose.yml` contains no hardcoded passwords or secrets.
+- [ ] App startup fails fast with a clear error if `JWT_SECRET` does not meet minimum entropy requirements.
+- [ ] CI pipeline rejects commits containing known secret patterns.
+
+---
+
+## TASK-029: Backend — Security: Fix IDOR on Chore Read Endpoints
+
+**Domain**: Backend  
+**Priority**: CRITICAL — do before any deployment  
+**Depends on**: TASK-011, TASK-005  
+**Source**: `docs/backend-report.md` SEC-003
+
+`GET /households/{household_id}/chores` (`chores.py:164`) and `GET /households/{household_id}/chores/{instance_id}` (`chores.py:203`) use `Depends(get_current_user)` instead of `Depends(require_household_member)`. Any authenticated user who knows a household UUID can enumerate all its chore instances and assignees, regardless of membership.
+
+All write endpoints on the same router already use the correct dependency. This is an inconsistency introduced during implementation.
+
+**Steps**:
+1. In `app/api/chores.py`, replace the `_current_user: User = Depends(get_current_user)` parameter in `list_chores` and `get_chore_instance` with `_membership: HouseholdMembership = Depends(require_household_member)`.
+2. Add a test case in `tests/test_chores.py` that asserts a non-member receives HTTP 403 when calling both read endpoints.
+
+**Acceptance criteria**:
+- [ ] `GET /households/{id}/chores` returns HTTP 403 for an authenticated user who is not a member of that household.
+- [ ] `GET /households/{id}/chores/{instance_id}` returns HTTP 403 for a non-member.
+- [ ] Existing tests for members continue to pass.
+- [ ] New non-member test cases are added and pass.
+
+---
+
+## TASK-030: Backend — Fix Recurrence Rule Key Mismatch
+
+**Domain**: Backend  
+**Priority**: High — breaks recurring chore creation  
+**Depends on**: TASK-012  
+**Source**: `docs/backend-report.md` (implementation completeness section)
+
+`RecurrenceRule` in `app/schemas/chore.py` defines `interval_unit` and `interval_n` as required fields. Several tests (including `test_integration.py:318` and `test_chores.py`) send `unit` and `interval` instead. In Pydantic v2 with default `extra="ignore"`, the correct fields are treated as missing and the request returns HTTP 422. The scheduler also silently falls back to defaults when the stored JSONB does not contain the expected keys.
+
+**Steps**:
+1. Decide on canonical field names. The schema (`interval_unit`, `interval_n`) should be the source of truth.
+2. Update all test payloads that use `unit`/`interval` to use `interval_unit`/`interval_n`.
+3. Optionally add Pydantic `Field(alias=...)` or a `model_validator` to accept both forms and raise a deprecation warning — only if a migration path is needed.
+4. Verify the scheduler's `_compute_due_dates` reads `interval_unit` and `interval_n` from the JSONB (it does — confirm the keys match).
+5. Run the full test suite and confirm `test_integration.py` passes.
+
+**Acceptance criteria**:
+- [ ] `POST /households/{id}/chores` with `chore_type: recurring` and a valid `recurrence_rule` returns HTTP 201.
+- [ ] The integration test that creates a recurring chore and runs the scheduler passes end-to-end.
+- [ ] No test sends `unit` or `interval` as recurrence rule keys.
+
+---
+
+## TASK-031: Backend — Add Rate Limiting on Auth Endpoints
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-004  
+**Source**: `docs/backend-report.md` SEC-004
+
+`POST /auth/login` and `POST /auth/register` are open to unlimited requests, enabling brute-force and credential-stuffing attacks. bcrypt's cost factor slows individual attempts but does not substitute for per-IP rate limits.
+
+**Steps**:
+1. Add `slowapi` to `pyproject.toml` dependencies.
+2. Initialise a `Limiter` keyed on `get_remote_address` in `main.py` and attach it to `app.state`.
+3. Add the `SlowAPIMiddleware` to the app.
+4. Apply a limit of `5/minute` to `POST /auth/login` per IP.
+5. Apply a limit of `10/hour` to `POST /auth/register` per IP.
+6. Return HTTP 429 with a `Retry-After` header when the limit is exceeded.
+7. Add a test that verifies the 429 response is returned after the limit threshold.
+
+**Acceptance criteria**:
+- [ ] More than 5 login attempts per minute from the same IP returns HTTP 429.
+- [ ] More than 10 register attempts per hour from the same IP returns HTTP 429.
+- [ ] Requests below the limit continue to work correctly.
+- [ ] `Retry-After` header is present on 429 responses.
+
+---
+
+## TASK-032: Backend — Harden Dockerfile
+
+**Domain**: DevOps  
+**Priority**: High  
+**Depends on**: TASK-027  
+**Source**: `docs/backend-report.md` SEC-005, deployment readiness section
+
+The `backend/Dockerfile` runs the uvicorn process as root (no `USER` directive), has no `HEALTHCHECK` instruction, and installs test dependencies in the production image because they are in `[project]` rather than an optional group.
+
+**Steps**:
+1. Move `pytest`, `pytest-asyncio`, `pytest-cov`, and `httpx` from `[project]` to `[project.optional-dependencies]` under a `test` group in `pyproject.toml`.
+2. Rewrite the Dockerfile to use a multi-stage build:
+   - Stage 1 (`builder`): install dependencies with `uv sync --frozen --no-dev`.
+   - Stage 2 (`runtime`): copy only the venv and source; create a non-root system user; switch to that user before the `CMD`.
+3. Add a `HEALTHCHECK` instruction that calls `GET /health`.
+4. Set `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUNBUFFERED=1`.
+5. Update `docker-compose.yml` to use separate `command` overrides for dev (with `--reload`) vs. production, and remove `--reload` from the default `CMD`.
+6. Add `--proxy-headers` to the uvicorn `CMD` for correct client IP forwarding behind a reverse proxy.
+
+**Acceptance criteria**:
+- [ ] `docker build` produces an image where `whoami` inside the container returns a non-root user.
+- [ ] The built image does not contain `pytest` or `httpx` (verify with `pip show pytest` inside the container).
+- [ ] `docker inspect` shows a `HEALTHCHECK` defined.
+- [ ] `uv sync --no-dev` does not install test packages.
+
+---
+
+## TASK-033: Backend — JWT Revocation and Logout Endpoint
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-005  
+**Source**: `docs/backend-report.md` SEC-006
+
+JWTs are currently valid for 7 days with no revocation mechanism. There is no logout endpoint. A stolen token cannot be invalidated.
+
+**Steps**:
+1. Add a `jti` (UUID) claim to every JWT issued in `app/core/security.py:create_access_token`.
+2. Add a token blocklist backed by a simple database table (or Redis if available). For the MVP, a `RevokedToken` SQLAlchemy model with columns `jti (PK)`, `revoked_at`, `expires_at` is sufficient.
+3. In `get_current_user` (`app/api/deps.py`), after decoding the JWT, check whether the `jti` exists in the blocklist. If it does, raise HTTP 401.
+4. Add `POST /auth/logout` that reads the current bearer token's `jti` and inserts it into the blocklist.
+5. Add a background cleanup job (or a lazy cleanup on each login) that removes expired entries from the blocklist table.
+6. Reduce `JWT_EXPIRY_DAYS` default to `1` and document a `REFRESH_TOKEN_TTL_DAYS` env var for the future refresh-token flow.
+
+**Acceptance criteria**:
+- [ ] `POST /auth/logout` with a valid token returns HTTP 200 and the token is added to the blocklist.
+- [ ] Subsequent requests using the logged-out token return HTTP 401.
+- [ ] Tokens not in the blocklist continue to work normally.
+- [ ] The blocklist cleanup removes entries whose `expires_at` is in the past.
+
+---
+
+## TASK-034: Backend — Fix Enum Validation in Chore Schemas
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-011  
+**Source**: `docs/backend-report.md` SEC-007, type safety section
+
+`category`, `effort_level`, `chore_type`, and `interval_unit` are plain `str` in `app/schemas/chore.py`. Invalid values pass Pydantic validation, reach the database, and cause a PostgreSQL constraint error that surfaces as HTTP 500 instead of a clean HTTP 422.
+
+**Steps**:
+1. Define `Literal` types (or `StrEnum`) for each field in `app/schemas/chore.py`:
+   - `category`: all values from `app/core/constants.py` (or define them there and import).
+   - `effort_level`: `Literal["easy", "medium", "hard"]`.
+   - `chore_type`: `Literal["one_off", "recurring"]`.
+   - `RecurrenceRule.interval_unit`: `Literal["days", "weeks", "months"]`.
+2. Add `le=365` upper bound to `RecurrenceRule.interval_n`.
+3. Add `max_length=72` and a complexity `@field_validator` to `RegisterRequest.password` in `app/schemas/auth.py` (72 is bcrypt's effective truncation limit).
+4. Add `max_length=100` to `UpdateProfileRequest.display_name` in `app/api/users.py`.
+5. Add a global `IntegrityError` / `UniqueViolationError` exception handler in `main.py` to convert any remaining DB constraint errors to HTTP 409 instead of 500.
+6. Add tests for each invalid-value case to confirm HTTP 422 is returned.
+
+**Acceptance criteria**:
+- [ ] `POST /chores` with `effort_level: "extreme"` returns HTTP 422, not 500.
+- [ ] `POST /chores` with `interval_unit: "fortnights"` returns HTTP 422.
+- [ ] `POST /auth/register` with a 200-character password returns HTTP 422.
+- [ ] `PATCH /users/me` with a 200-character display name returns HTTP 422.
+- [ ] A database `UniqueViolationError` that is not caught by business logic returns HTTP 409.
+
+---
+
+## TASK-035: Backend — Deep Health Check and API Docs Access Control
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-001, TASK-002  
+**Source**: `docs/backend-report.md` deployment readiness, SEC-009
+
+`GET /health` returns `{"status": "ok"}` without probing the database. Kubernetes readiness probes cannot distinguish a healthy pod from one with a broken DB connection. Additionally, `/docs`, `/redoc`, and `/openapi.json` are exposed unconditionally in all environments, disclosing the full API surface to unauthenticated users in production.
+
+**Steps**:
+1. Update `app/api/health.py` to execute `SELECT 1` against the database. Return HTTP 200 on success and HTTP 503 if the database is unreachable.
+2. Add `DEBUG: bool = False` to `app/core/config.py` `Settings`.
+3. In `main.py`, conditionally set `docs_url`, `redoc_url`, and `openapi_url` to `None` when `settings.DEBUG` is `False`.
+4. Update `backend/.env.example` to document `DEBUG=true` for local development.
+5. Update the `docker-compose.yml` `api` service to pass `DEBUG=true`.
+
+**Acceptance criteria**:
+- [ ] `GET /health` returns HTTP 200 and `{"status": "ok"}` when the DB is reachable.
+- [ ] `GET /health` returns HTTP 503 when the DB connection fails.
+- [ ] `/docs` returns HTTP 404 when `DEBUG=false`.
+- [ ] `/docs` returns HTTP 200 when `DEBUG=true`.
+
+---
+
+## TASK-036: Backend — Consolidate Test Fixtures
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-026  
+**Source**: `docs/backend-report.md` test coverage section
+
+`_get_test_database_url()` is duplicated across 9 test files. The `async_client` fixture (engine setup, schema drop/create, override injection) is duplicated across ~8 files. This makes fixture maintenance error-prone and inflates the test suite by ~300 lines.
+
+**Steps**:
+1. Move `_get_test_database_url()` into `tests/conftest.py` (it already exists there — remove all copies from individual test files).
+2. Create a single session-scoped `async_engine` fixture and a function-scoped `async_client` fixture in `conftest.py` that handles schema creation, dependency overrides, and teardown.
+3. Delete all duplicate fixture definitions from `test_auth.py`, `test_chores.py`, `test_completion.py`, `test_households.py`, `test_invites.py`, `test_leaderboard.py`, `test_members.py`, `test_integration.py`, and `test_auth_middleware.py`.
+4. Add `addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"` to `[tool.pytest.ini_options]` in `pyproject.toml` to enforce coverage measurement.
+5. Remove the dead `_recurring_payload` fixture from `test_chores.py:205`.
+6. Remove the unused `_COMPLETABLE_STATUSES` constant from `app/api/chores.py:233`.
+
+**Acceptance criteria**:
+- [ ] `_get_test_database_url()` appears only once in the codebase.
+- [ ] `async_client` fixture appears only in `conftest.py`.
+- [ ] Full test suite passes after the consolidation.
+- [ ] `pytest --cov=app` reports coverage and fails if below 80%.
+- [ ] No dead code (`_recurring_payload`, `_COMPLETABLE_STATUSES`) remains.
+
+---
+
+## TASK-037: Backend — Security Headers, CORS, and Minor Input Validation
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-001  
+**Source**: `docs/backend-report.md` SEC-010, SEC-011, SEC-012, SEC-013, SEC-023
+
+Several small but impactful security hardening items that do not warrant individual tasks.
+
+**Steps**:
+1. **Remove PostgreSQL port binding**: In `docker-compose.yml`, change the `db` service `ports` mapping from `"5432:5432"` to `"127.0.0.1:5432:5432"` so the database is not reachable from outside the host.
+2. **Security headers middleware**: Add a `SecurityHeadersMiddleware` in `main.py` that sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Strict-Transport-Security: max-age=63072000; includeSubDomains` on every response.
+3. **CORS middleware**: Add `CORSMiddleware` with `allow_origins=settings.CORS_ALLOWED_ORIGINS` (a `list[str]` env var defaulting to `[]`). Never use `allow_origins=["*"]` with `allow_credentials=True`.
+4. **Invite token cap**: In `app/api/invites.py:create_invite`, before inserting a new token, expire any existing non-used, non-expired tokens for the same household by setting their `expires_at = now()`.
+5. **Assignee membership check**: In `app/api/chores.py:create_chore`, when `body.assignee_id` is provided, verify the target user has an active membership in the household. Return HTTP 422 if not.
+6. **Remove `rotation_pointer` from response schemas**: Remove the field from `HouseholdResponse`, `HouseholdWithRoleResponse`, and `HouseholdDetailResponse` in `app/schemas/household.py`.
+
+**Acceptance criteria**:
+- [ ] All responses include `X-Content-Type-Options` and `X-Frame-Options` headers.
+- [ ] PostgreSQL is not reachable on `0.0.0.0:5432`.
+- [ ] Generating a second invite invalidates the previous active token for the same household.
+- [ ] Creating a chore with an `assignee_id` that is not a member of the household returns HTTP 422.
+- [ ] `rotation_pointer` does not appear in any API response.
+- [ ] `GET /households` and `GET /households/{id}` responses do not include `rotation_pointer`.
+
+---
+
+## TASK-038: Backend — JWT Token Refresh Endpoint
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-033  
+**Source**: `docs/backend-report.md` missing features section
+
+After TASK-033 reduces the access token lifetime to 1 day, clients need a way to obtain a new access token without forcing the user to log in again. This task adds a refresh token model and the corresponding endpoint.
+
+**Steps**:
+1. Add a `RefreshToken` model: `id (UUID PK)`, `user_id (FK)`, `token_hash (str)`, `created_at`, `expires_at`, `revoked_at (nullable)`.
+2. On successful login (`POST /auth/login`), generate and store a refresh token (long-lived, default 30 days via `REFRESH_TOKEN_TTL_DAYS` env var). Return it in the login response as `refresh_token`.
+3. Add `POST /auth/refresh` that accepts `{ "refresh_token": str }`, validates the token (exists, not expired, not revoked), issues a new access token, and rotates the refresh token (marks old as revoked, issues a new one).
+4. On logout (`POST /auth/logout` from TASK-033), also revoke the refresh token associated with the session.
+
+**Acceptance criteria**:
+- [ ] Successful login returns both `access_token` and `refresh_token`.
+- [ ] `POST /auth/refresh` with a valid refresh token returns a new `access_token` and a new `refresh_token`.
+- [ ] Using a revoked or expired refresh token returns HTTP 401.
+- [ ] Logout revokes both access token (blocklist) and refresh token.
+
+---
+
+## TASK-039: Backend — Chore Reassignment and Pagination
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-011, TASK-010  
+**Source**: `docs/backend-report.md` missing features section
+
+Two feature gaps on the chore endpoints: there is no way to manually reassign a chore, and `GET /chores` returns an unbounded result set with no pagination.
+
+**Steps**:
+1. **Reassignment endpoint**: Add `PATCH /households/{household_id}/chores/{instance_id}/assignee` (Admin only). Body: `{ "assignee_id": uuid | null }`. If `assignee_id` is provided, validate that the user is an active household member. Update `ChoreInstance.assignee_id` and set `assigned_manually = True`. If `null`, call `auto_assign()` and set `assigned_manually = False`.
+2. **Pagination**: Add `limit: int = Query(50, ge=1, le=200)` and `offset: int = Query(0, ge=0)` parameters to `GET /households/{household_id}/chores`. Apply `.limit(limit).offset(offset)` to the query and return a response envelope `{ "items": [...], "total": int, "limit": int, "offset": int }`.
+3. Update `ChoreListResponse` schema to match the paginated envelope.
+4. Update Flutter API client (or document the breaking change) if the app is already consuming this endpoint.
+
+**Acceptance criteria**:
+- [ ] `PATCH /chores/{instance_id}/assignee` with a valid member ID updates the assignee and returns the updated instance.
+- [ ] `PATCH /chores/{instance_id}/assignee` with a non-member ID returns HTTP 422.
+- [ ] `GET /chores?limit=10&offset=0` returns at most 10 results and a `total` count.
+- [ ] A Member (non-Admin) calling the reassign endpoint receives HTTP 403.
+
+---
+
+## TASK-040: Backend — Invite Management Endpoints
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-008  
+**Source**: `docs/backend-report.md` missing features section
+
+There is no way for admins to list or revoke active invite tokens for their household.
+
+**Steps**:
+1. Add `GET /households/{household_id}/invites` (Admin only) — returns all non-expired, non-used tokens for the household: `[ { "token": str, "created_at": datetime, "expires_at": datetime } ]`. Do not return the raw token — return only the first 8 characters and replace the rest with `***` for display, plus the `id`.
+2. Add `DELETE /households/{household_id}/invites/{invite_id}` (Admin only) — sets `expires_at = now()` on the token, effectively revoking it. Returns HTTP 204.
+3. Accepting a revoked token (one whose `expires_at` is in the past) already returns HTTP 410 via existing logic — confirm this is covered.
+
+**Acceptance criteria**:
+- [ ] `GET /invites` returns only active (non-expired, non-used) tokens.
+- [ ] `DELETE /invites/{id}` marks the token as expired and subsequent accept attempts return HTTP 410.
+- [ ] A Member (non-Admin) receives HTTP 403 for both endpoints.
+- [ ] Tests cover both endpoints and the accept-after-revoke flow.
+
+---
+
+## TASK-041: Backend — Fix Performance: N+1 Queries
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-012, TASK-015  
+**Source**: `docs/backend-report.md` maintainability section
+
+Two N+1 query patterns exist that will degrade performance at scale.
+
+**Steps**:
+1. **Scheduler (`app/tasks/scheduler.py`)**: Replace the per-definition `SELECT due_date WHERE definition_id = ?` loop with a single query that fetches all `(definition_id, due_date)` pairs for all active definitions in one round-trip. Build a `set[tuple[UUID, date]]` of existing pairs and check membership in Python.
+2. **Redistribution (`app/services/redistribution.py`)**: Replace the per-chore `SELECT FOR UPDATE` on the household row (one lock acquisition per chore) with a single `SELECT FOR UPDATE` at the start of the redistribution loop. Fetch active members once. Cycle through members in Python. Issue a single `UPDATE households SET rotation_pointer = ?` at the end.
+3. Add a missing index on `ChoreInstance.due_date` and on `ChoreInstance.definition_id` via a new Alembic migration (these columns are queried frequently but have no index).
+4. Add a `UniqueConstraint("chore_instance_id")` on `PointLedger` via the same migration to prevent double-ledger entries at the database level.
+
+**Acceptance criteria**:
+- [ ] The scheduler generates instances for N definitions in exactly 2 database round-trips (one for definitions, one for existing pairs), not N+2.
+- [ ] Redistribution of M chores against a household acquires the `FOR UPDATE` lock exactly once.
+- [ ] Alembic migration adds the two missing indexes and the `PointLedger` unique constraint.
+- [ ] All scheduler and redistribution tests continue to pass.
+
+---
+
+## TASK-042: Backend — Replace Unmaintained Dependencies
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-001  
+**Source**: `docs/backend-report.md` maintainability section (F-M2, F-M3)
+
+`passlib` (last release 2022) and `python-jose` (last release 2022, known CVEs) are unmaintained. The `bcrypt<4.0.0` version cap blocks security patches.
+
+**Steps**:
+1. Replace `passlib[bcrypt]` with direct `bcrypt>=4.0.0` usage in `app/core/security.py`:
+   ```python
+   import bcrypt
+   def hash_password(plain: str) -> str:
+       return bcrypt.hashpw(plain.encode(), bcrypt.gensalt(rounds=12)).decode()
+   def verify_password(plain: str, hashed: str) -> bool:
+       return bcrypt.checkpw(plain.encode(), hashed.encode())
+   ```
+2. Replace `python-jose[cryptography]` with `PyJWT[crypto]` in `pyproject.toml` and update `app/core/security.py` to use `jwt.encode` / `jwt.decode` from the `PyJWT` API (the call signatures differ slightly).
+3. Remove `passlib`, `python-jose`, and the `bcrypt<4.0.0` pin from `pyproject.toml`. Add `bcrypt>=4.0.0` and `PyJWT[crypto]`.
+4. Run `uv lock` to regenerate `uv.lock`.
+5. Run the full test suite to confirm no regressions.
+
+**Acceptance criteria**:
+- [ ] `passlib` and `python-jose` are absent from `pyproject.toml` and `uv.lock`.
+- [ ] `bcrypt>=4.0.0` and `PyJWT` are present.
+- [ ] Login, register, and JWT middleware tests all pass.
+- [ ] `pip show passlib python-jose` inside the Docker image returns "not found".
+
+---
+
+## TASK-043: Backend — Fix Scheduler Timezone and Structured Logging
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-012  
+**Source**: `docs/backend-report.md` SEC-016, F-M4
+
+Two maintenance issues in `app/tasks/scheduler.py`: the `_today()` helper uses local time (`date.today()`) while APScheduler runs in UTC, causing off-by-one errors near midnight in non-UTC server timezones. Additionally, route handlers emit no log output, making incident investigation difficult.
+
+**Steps**:
+1. **Timezone fix**: In `app/tasks/scheduler.py:37`, replace `return date.today()` with `return datetime.now(timezone.utc).date()`.
+2. **Structured logging**: Add `structlog` to `pyproject.toml`. Configure it in `main.py` with a JSON renderer in production and a console renderer in development (`DEBUG=true`). Each log entry should include `request_id`, `user_id` (if available), and `household_id` (if available) via context variables or middleware.
+3. **Request ID middleware**: Add a middleware that generates a `request_id` (UUID) per request, attaches it to the structlog context, and returns it in the response as `X-Request-ID`.
+4. **Audit log entries**: Add `logger.info` calls for: successful login, failed login (with masked email), member removed, role changed, chore completed, member joined via invite.
+
+**Acceptance criteria**:
+- [ ] `_today()` returns UTC date regardless of server timezone.
+- [ ] Scheduler tests that monkeypatch `_today()` continue to pass.
+- [ ] Log output in production is valid JSON with `request_id`, `level`, `timestamp`, and `event` fields.
+- [ ] Failed login attempts are logged with the email (masked, e.g. `a***@example.com`).
+- [ ] `X-Request-ID` header is present in all responses.
+
+---
+
+## TASK-044: Backend — Scheduler Multi-Worker Safety
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-012  
+**Source**: `docs/backend-report.md` deployment readiness section
+
+`AsyncIOScheduler` runs inside the uvicorn process. With multiple workers or container replicas, every worker runs its own scheduler copy, and the daily job fires N times. While `generate_chore_instances` is idempotent, the rotation pointer is advanced N times and audit logs are duplicated.
+
+**Steps**:
+1. Add a PostgreSQL advisory lock inside `run_daily_job` in `app/tasks/scheduler.py` using `pg_try_advisory_xact_lock`. If the lock is not acquired, log "skipping — another worker holds the lock" and return immediately.
+   ```python
+   result = await session.execute(text("SELECT pg_try_advisory_xact_lock(:id)"), {"id": 99_001})
+   if not result.scalar():
+       logger.info("daily_job.skipped", reason="lock_held_by_another_worker")
+       return
+   ```
+2. Document in `README` / deployment notes that the lock is PostgreSQL-specific and will not work if the scheduler is ever moved to a different backend.
+3. Add an integration test that runs two scheduler invocations concurrently and asserts that chore instances are created exactly once.
+
+**Acceptance criteria**:
+- [ ] Running the scheduler job concurrently from two workers produces exactly one set of chore instances, not two.
+- [ ] The second worker logs a "skipped" message and exits without error.
+- [ ] Existing scheduler tests are unaffected.
+
+---
+
 ## Dependency Graph Summary
 
 ```

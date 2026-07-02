@@ -10,7 +10,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_household_member
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.household import Household
@@ -75,6 +75,10 @@ def override_require_admin() -> HouseholdMembership:
     return fake_admin_membership
 
 
+def override_require_household_member() -> HouseholdMembership:
+    return fake_admin_membership
+
+
 def override_get_current_user_admin() -> User:
     return fake_admin
 
@@ -120,6 +124,7 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
     # Default: admin auth
     app.dependency_overrides[get_current_user] = override_get_current_user_admin
     app.dependency_overrides[require_admin] = override_require_admin
+    app.dependency_overrides[require_household_member] = override_require_household_member
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -211,7 +216,7 @@ def _recurring_payload(
         "effort_level": "medium",
         "chore_type": "recurring",
         "first_due_date": str(date.today().isoformat()),
-        "recurrence_rule": {"unit": "weeks", "interval": 1},
+        "recurrence_rule": {"interval_unit": "weeks", "interval_n": 1},
     }
     if overrides:
         payload.update(overrides)

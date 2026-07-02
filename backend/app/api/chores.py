@@ -162,7 +162,7 @@ async def list_chores(
     category: Optional[str] = None,
     assignee_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),  # any authenticated user
+    _membership: HouseholdMembership = Depends(require_household_member),
 ) -> list[ChoreInstanceResponse]:
     """List ChoreInstances for a household, with optional filters."""
     stmt = (
@@ -201,7 +201,7 @@ async def get_chore_instance(
     household_id: uuid.UUID,
     instance_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),  # any authenticated user
+    _membership: HouseholdMembership = Depends(require_household_member),
 ) -> ChoreInstanceResponse:
     """Return a single ChoreInstance with definition data embedded."""
     stmt = (
