@@ -1,8 +1,11 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 from app.api import auth, health
 from app.api.chores import router as chores_router
@@ -26,6 +29,16 @@ docs_url = "/docs" if settings.DEBUG else None
 redoc_url = "/redoc" if settings.DEBUG else None
 openapi_url = "/openapi.json" if settings.DEBUG else None
 
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
+
+
 app = FastAPI(
     title="ChoreApp API",
     version="0.1.0",
@@ -33,6 +46,19 @@ app = FastAPI(
     docs_url=docs_url,
     redoc_url=redoc_url,
     openapi_url=openapi_url,
+)
+
+# Middleware is applied in reverse registration order (last added = outermost).
+# SecurityHeadersMiddleware is registered first (inner layer).
+# CORSMiddleware is registered last (outermost layer) so it handles preflight
+# before any other middleware runs.
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
