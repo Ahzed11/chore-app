@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin, require_household_member
@@ -23,7 +23,9 @@ from app.schemas.chore import (
     ChoreCreate,
     ChoreDefinitionResponse,
     ChoreInstanceResponse,
+    ChoreReassignRequest,
     ChoreUpdate,
+    PaginatedChoreResponse,
 )
 from app.services.assignment import AssignmentService, get_assignment_service
 
@@ -168,39 +170,57 @@ async def create_chore(
 
 @router.get(
     "",
-    response_model=list[ChoreInstanceResponse],
+    response_model=PaginatedChoreResponse,
 )
 async def list_chores(
     household_id: uuid.UUID,
     status_filter: Optional[str] = None,
     category: Optional[str] = None,
     assignee_id: Optional[uuid.UUID] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _membership: HouseholdMembership = Depends(require_household_member),
-) -> list[ChoreInstanceResponse]:
-    """List ChoreInstances for a household, with optional filters."""
+) -> PaginatedChoreResponse:
+    """List ChoreInstances for a household, with optional filters and pagination."""
+    # Build shared filter conditions applied to both the data query and COUNT.
+    base_filters = [
+        ChoreInstance.household_id == household_id,
+        ChoreDefinition.is_active == True,  # noqa: E712
+    ]
+    if status_filter is not None:
+        base_filters.append(ChoreInstance.status == status_filter)
+    if category is not None:
+        base_filters.append(ChoreDefinition.category == category)
+    if assignee_id is not None:
+        base_filters.append(ChoreInstance.assignee_id == assignee_id)
+
+    # COUNT query — same joins and filters, no ordering or pagination.
+    count_stmt = (
+        select(func.count())
+        .select_from(ChoreInstance)
+        .join(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
+        .where(*base_filters)
+    )
+    total: int = (await db.scalar(count_stmt)) or 0
+
+    # Data query with pagination applied.
     stmt = (
         select(ChoreInstance, ChoreDefinition, User.display_name)
         .join(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
         .outerjoin(User, ChoreInstance.assignee_id == User.id)
-        .where(ChoreInstance.household_id == household_id)
-        .where(ChoreDefinition.is_active == True)
+        .where(*base_filters)
+        .limit(limit)
+        .offset(offset)
     )
-
-    if status_filter is not None:
-        stmt = stmt.where(ChoreInstance.status == status_filter)
-    if category is not None:
-        stmt = stmt.where(ChoreDefinition.category == category)
-    if assignee_id is not None:
-        stmt = stmt.where(ChoreInstance.assignee_id == assignee_id)
-
     result = await db.execute(stmt)
     rows = result.all()
 
-    return [
+    instances = [
         _instance_response_from_row(instance, definition, display_name)
         for instance, definition, display_name in rows
     ]
+    return PaginatedChoreResponse(items=instances, total=total, limit=limit, offset=offset)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +345,90 @@ async def complete_chore_instance(
     db.add(ledger_entry)
 
     # Resolve assignee display name for the response.
+    assignee_name: Optional[str] = None
+    if instance.assignee_id is not None:
+        user_result = await db.execute(
+            select(User).where(User.id == instance.assignee_id)
+        )
+        assignee = user_result.scalar_one_or_none()
+        if assignee is not None:
+            assignee_name = assignee.display_name
+
+    return _instance_response_from_row(instance, definition, assignee_name)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /households/{household_id}/chores/{instance_id}/assignee  — admin only
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/{instance_id}/assignee",
+    response_model=ChoreInstanceResponse,
+)
+async def reassign_chore(
+    household_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    body: ChoreReassignRequest,
+    _membership: HouseholdMembership = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    assignment_service: AssignmentService = Depends(get_assignment_service),
+) -> ChoreInstanceResponse:
+    """Manually reassign a ChoreInstance to a specific member or trigger auto-assignment.
+
+    Passing ``assignee_id=null`` re-runs round-robin auto-assignment and clears
+    the manual flag.  Passing a valid member UUID sets the assignee directly and
+    marks the instance as manually assigned.
+    """
+    # 1. Fetch the instance, verifying it belongs to the requested household.
+    instance_result = await db.execute(
+        select(ChoreInstance).where(
+            ChoreInstance.id == instance_id,
+            ChoreInstance.household_id == household_id,
+        )
+    )
+    instance = instance_result.scalar_one_or_none()
+    if instance is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chore instance not found",
+        )
+
+    if body.assignee_id is not None:
+        # 2. Verify the target user is an active member of this household.
+        member_check = await db.execute(
+            select(HouseholdMembership).where(
+                HouseholdMembership.household_id == household_id,
+                HouseholdMembership.user_id == body.assignee_id,
+                HouseholdMembership.is_active == True,  # noqa: E712
+            )
+        )
+        if member_check.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="assignee_id is not an active member of this household",
+            )
+        # 4. Manual assignment.
+        instance.assignee_id = body.assignee_id
+        instance.assigned_manually = True
+    else:
+        # 3. Auto-assign via round-robin strategy.
+        new_assignee_id = await assignment_service.auto_assign(household_id, db)
+        instance.assignee_id = new_assignee_id
+        instance.assigned_manually = False
+
+    await db.flush()
+
+    # Fetch the definition and assignee name for the response.
+    def_result = await db.execute(
+        select(ChoreDefinition).where(ChoreDefinition.id == instance.definition_id)
+    )
+    definition = def_result.scalar_one_or_none()
+    if definition is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Chore definition no longer exists",
+        )
+
     assignee_name: Optional[str] = None
     if instance.assignee_id is not None:
         user_result = await db.execute(

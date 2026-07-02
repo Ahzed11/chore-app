@@ -326,7 +326,7 @@ async def test_create_chore_no_members_assignee_null(async_client: AsyncClient) 
 
 @pytest.mark.asyncio
 async def test_list_chores(async_client: AsyncClient) -> None:
-    """GET returns a list of chore instances."""
+    """GET returns a paginated envelope of chore instances."""
     sf = _get_session_factory()
     household_id, _ = await _seed_household_with_member(sf)
 
@@ -340,9 +340,10 @@ async def test_list_chores(async_client: AsyncClient) -> None:
     response = await async_client.get(f"/households/{household_id}/chores")
     assert response.status_code == 200, response.text
     data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
-    titles = {item["title"] for item in data}
+    assert isinstance(data, dict)
+    assert data["total"] == 2
+    assert len(data["items"]) == 2
+    titles = {item["title"] for item in data["items"]}
     assert titles == {"Chore A", "Chore B"}
 
 
@@ -363,8 +364,9 @@ async def test_filter_chores_by_status(async_client: AsyncClient) -> None:
     )
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len(data) >= 1
-    for item in data:
+    assert data["total"] >= 1
+    assert len(data["items"]) >= 1
+    for item in data["items"]:
         assert item["status"] == "pending"
 
 
@@ -391,9 +393,10 @@ async def test_filter_chores_by_category(async_client: AsyncClient) -> None:
     )
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["category"] == "kitchen"
-    assert data[0]["title"] == "Kitchen Chore"
+    assert data["total"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["category"] == "kitchen"
+    assert data["items"][0]["title"] == "Kitchen Chore"
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +598,103 @@ async def test_member_cannot_create_chore(async_client: AsyncClient) -> None:
     finally:
         # Restore admin override for any subsequent tests sharing the client
         app.dependency_overrides[require_admin] = override_require_admin
+
+
+# ---------------------------------------------------------------------------
+# PATCH /{instance_id}/assignee tests  (TASK-039)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reassign_chore_to_member(async_client: AsyncClient) -> None:
+    """PATCH /assignee with a valid member UUID sets assignee and marks assigned_manually."""
+    sf = _get_session_factory()
+    household_id, member_id = await _seed_household_with_member(sf)
+
+    create_resp = await async_client.post(
+        f"/households/{household_id}/chores",
+        json=_one_off_payload(household_id),
+    )
+    assert create_resp.status_code == 201
+    instance_id = create_resp.json()["first_instance"]["id"]
+
+    response = await async_client.patch(
+        f"/households/{household_id}/chores/{instance_id}/assignee",
+        json={"assignee_id": str(member_id)},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["assignee_id"] == str(member_id)
+    assert data["assigned_manually"] is True
+
+
+@pytest.mark.asyncio
+async def test_reassign_chore_to_none_auto_assigns(async_client: AsyncClient) -> None:
+    """PATCH /assignee with assignee_id=null triggers auto-assignment and clears the manual flag."""
+    sf = _get_session_factory()
+    household_id, member_id = await _seed_household_with_member(sf)
+
+    create_resp = await async_client.post(
+        f"/households/{household_id}/chores",
+        json=_one_off_payload(household_id),
+    )
+    assert create_resp.status_code == 201
+    instance_id = create_resp.json()["first_instance"]["id"]
+
+    response = await async_client.patch(
+        f"/households/{household_id}/chores/{instance_id}/assignee",
+        json={"assignee_id": None},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    # The only active member in the household must have been picked by auto-assignment.
+    assert data["assignee_id"] == str(member_id)
+    assert data["assigned_manually"] is False
+
+
+@pytest.mark.asyncio
+async def test_reassign_chore_non_member_422(async_client: AsyncClient) -> None:
+    """PATCH /assignee with a UUID that is not an active household member returns 422."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    create_resp = await async_client.post(
+        f"/households/{household_id}/chores",
+        json=_one_off_payload(household_id),
+    )
+    assert create_resp.status_code == 201
+    instance_id = create_resp.json()["first_instance"]["id"]
+
+    response = await async_client.patch(
+        f"/households/{household_id}/chores/{instance_id}/assignee",
+        json={"assignee_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 422, response.text
+
+
+# ---------------------------------------------------------------------------
+# Pagination tests  (TASK-039)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_chores_pagination(async_client: AsyncClient) -> None:
+    """GET /chores?limit=2&offset=0 returns 2 items while total reflects all 3."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    # Create 3 chores
+    for title in ("Chore A", "Chore B", "Chore C"):
+        await async_client.post(
+            f"/households/{household_id}/chores",
+            json=_one_off_payload(household_id, overrides={"title": title}),
+        )
+
+    response = await async_client.get(
+        f"/households/{household_id}/chores",
+        params={"limit": 2, "offset": 0},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 3
+    assert len(data["items"]) == 2
+    assert data["limit"] == 2
+    assert data["offset"] == 0
