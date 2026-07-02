@@ -16,6 +16,7 @@ from app.models.household_membership import HouseholdMembership
 from app.models.invite_token import InviteToken
 from app.models.user import User
 from app.schemas.household import HouseholdResponse
+from app.schemas.invite import InviteTokenResponse
 
 router = APIRouter(tags=["invites"])
 
@@ -123,3 +124,60 @@ async def accept_invite(
         name=household.name,
         created_at=household.created_at,
     )
+
+
+@router.get(
+    "/households/{household_id}/invites",
+    response_model=list[InviteTokenResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_invites(
+    household_id: uuid.UUID,
+    _membership: HouseholdMembership = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[InviteTokenResponse]:
+    """List all active (non-expired, non-used) invite tokens for a household (admin only)."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(InviteToken)
+        .where(
+            InviteToken.household_id == household_id,
+            InviteToken.used_at == None,  # noqa: E711
+            InviteToken.expires_at > now,
+        )
+        .order_by(InviteToken.created_at.desc())
+    )
+    tokens = result.scalars().all()
+    return [
+        InviteTokenResponse(
+            id=t.id,
+            token_preview=t.token[:8] + "***",
+            created_at=t.created_at,
+            expires_at=t.expires_at,
+        )
+        for t in tokens
+    ]
+
+
+@router.delete(
+    "/households/{household_id}/invites/{invite_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_invite(
+    household_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    _membership: HouseholdMembership = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Revoke an invite token by expiring it immediately (admin only)."""
+    result = await db.execute(
+        select(InviteToken).where(
+            InviteToken.id == invite_id,
+            InviteToken.household_id == household_id,
+        )
+    )
+    token = result.scalar_one_or_none()
+    if token is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    token.expires_at = datetime.now(timezone.utc)
+    await db.flush()

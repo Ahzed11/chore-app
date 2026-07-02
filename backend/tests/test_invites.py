@@ -208,3 +208,140 @@ async def test_already_member_accept_returns_409(async_client: AsyncClient) -> N
         headers=_auth(token_alice),
     )
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# GET /households/{household_id}/invites  (TASK-040)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_invites_returns_active_tokens(async_client: AsyncClient) -> None:
+    """Admin creates an invite then lists it; response contains masked token_preview."""
+    token_alice = await _register_and_login(async_client, "alice@example.com", "Alice")
+    household_id = await _create_household(async_client, token_alice)
+    await _generate_invite(async_client, token_alice, household_id)
+
+    resp = await async_client.get(
+        f"/households/{household_id}/invites",
+        headers=_auth(token_alice),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    entry = body[0]
+    assert "id" in entry
+    assert "token_preview" in entry
+    assert "created_at" in entry
+    assert "expires_at" in entry
+    assert entry["token_preview"].endswith("***")
+    # preview must not reveal the full token (token_urlsafe(16) is 22 chars)
+    assert len(entry["token_preview"]) == 11  # 8 chars + "***"
+
+
+@pytest.mark.asyncio
+async def test_list_invites_excludes_used_tokens(async_client: AsyncClient) -> None:
+    """After a token is accepted (used), the list endpoint returns an empty list."""
+    token_alice = await _register_and_login(async_client, "alice@example.com", "Alice")
+    token_bob = await _register_and_login(async_client, "bob@example.com", "Bob")
+    household_id = await _create_household(async_client, token_alice)
+    invite_token = await _generate_invite(async_client, token_alice, household_id)
+
+    # Bob accepts the invite, marking it as used
+    accept_resp = await async_client.post(
+        f"/invites/{invite_token}/accept",
+        headers=_auth(token_bob),
+    )
+    assert accept_resp.status_code == 200
+
+    # The invite list should now be empty
+    list_resp = await async_client.get(
+        f"/households/{household_id}/invites",
+        headers=_auth(token_alice),
+    )
+    assert list_resp.status_code == 200
+    assert list_resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# DELETE /households/{household_id}/invites/{invite_id}  (TASK-040)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revoke_invite_returns_204(async_client: AsyncClient) -> None:
+    """Admin revokes an active invite; subsequent accept returns 410."""
+    token_alice = await _register_and_login(async_client, "alice@example.com", "Alice")
+    token_bob = await _register_and_login(async_client, "bob@example.com", "Bob")
+    household_id = await _create_household(async_client, token_alice)
+    invite_token = await _generate_invite(async_client, token_alice, household_id)
+
+    # Retrieve the invite ID via the list endpoint
+    list_resp = await async_client.get(
+        f"/households/{household_id}/invites",
+        headers=_auth(token_alice),
+    )
+    assert list_resp.status_code == 200
+    invite_id = list_resp.json()[0]["id"]
+
+    # Revoke the invite
+    delete_resp = await async_client.delete(
+        f"/households/{household_id}/invites/{invite_id}",
+        headers=_auth(token_alice),
+    )
+    assert delete_resp.status_code == 204
+
+    # Bob tries to accept the revoked token — must get 410
+    accept_resp = await async_client.post(
+        f"/invites/{invite_token}/accept",
+        headers=_auth(token_bob),
+    )
+    assert accept_resp.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_revoke_invite_not_found_404(async_client: AsyncClient) -> None:
+    """Attempting to delete a non-existent invite UUID returns 404."""
+    import uuid as _uuid
+
+    token_alice = await _register_and_login(async_client, "alice@example.com", "Alice")
+    household_id = await _create_household(async_client, token_alice)
+    unknown_id = str(_uuid.uuid4())
+
+    resp = await async_client.delete(
+        f"/households/{household_id}/invites/{unknown_id}",
+        headers=_auth(token_alice),
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_invite_management_member_forbidden(async_client: AsyncClient) -> None:
+    """A regular member (non-admin) receives 403 on GET and DELETE invite endpoints."""
+    token_alice = await _register_and_login(async_client, "alice@example.com", "Alice")
+    token_bob = await _register_and_login(async_client, "bob@example.com", "Bob")
+    household_id = await _create_household(async_client, token_alice)
+
+    # Bob joins the household as a regular member
+    invite_token = await _generate_invite(async_client, token_alice, household_id)
+    accept_resp = await async_client.post(
+        f"/invites/{invite_token}/accept",
+        headers=_auth(token_bob),
+    )
+    assert accept_resp.status_code == 200
+
+    # Bob (member) tries to list invites — must be 403
+    get_resp = await async_client.get(
+        f"/households/{household_id}/invites",
+        headers=_auth(token_bob),
+    )
+    assert get_resp.status_code == 403
+
+    # Bob (member) tries to delete an invite with a random UUID — must be 403 (not 404)
+    import uuid as _uuid
+    delete_resp = await async_client.delete(
+        f"/households/{household_id}/invites/{_uuid.uuid4()}",
+        headers=_auth(token_bob),
+    )
+    assert delete_resp.status_code == 403
