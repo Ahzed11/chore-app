@@ -133,3 +133,109 @@ async def test_jwt_contains_user_id(async_client: AsyncClient) -> None:
 
     payload = decode_access_token(token)
     assert payload["sub"] == user_id
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by refresh / logout tests
+# ---------------------------------------------------------------------------
+
+
+async def _login(client: AsyncClient) -> dict:
+    """Register alice (if needed) then log in and return the response body."""
+    await _register(client)
+    response = await client.post(
+        "/auth/login",
+        json={
+            "email": _VALID_REGISTER_PAYLOAD["email"],
+            "password": _VALID_REGISTER_PAYLOAD["password"],
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+# ---------------------------------------------------------------------------
+# Refresh token tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_login_returns_refresh_token(async_client: AsyncClient) -> None:
+    body = await _login(async_client)
+
+    assert "refresh_token" in body
+    assert isinstance(body["refresh_token"], str)
+    assert len(body["refresh_token"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_issues_new_tokens(async_client: AsyncClient) -> None:
+    login_body = await _login(async_client)
+    old_refresh = login_body["refresh_token"]
+    old_access = login_body["access_token"]
+
+    response = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": old_refresh},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "access_token" in body
+    assert "refresh_token" in body
+    assert body["token_type"] == "bearer"
+    # Tokens must be fresh values.
+    assert body["access_token"] != old_access
+    assert body["refresh_token"] != old_refresh
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_used_token_401(async_client: AsyncClient) -> None:
+    """Replaying a consumed refresh token (rotation) must be rejected with 401."""
+    login_body = await _login(async_client)
+    old_refresh = login_body["refresh_token"]
+
+    # First use — should succeed and rotate the token.
+    first = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": old_refresh},
+    )
+    assert first.status_code == 200
+
+    # Second use of the same (now revoked) token — must fail.
+    second = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": old_refresh},
+    )
+    assert second.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_invalid_token_401(async_client: AsyncClient) -> None:
+    response = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": "this-is-complete-garbage"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_refresh_token(async_client: AsyncClient) -> None:
+    """After logout the refresh token must no longer be accepted."""
+    login_body = await _login(async_client)
+    access_token = login_body["access_token"]
+    refresh_token = login_body["refresh_token"]
+
+    logout_response = await async_client.post(
+        "/auth/logout",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert logout_response.status_code == 200
+
+    # The refresh token issued at login should now be revoked.
+    refresh_response = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert refresh_response.status_code == 401
