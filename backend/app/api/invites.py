@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
@@ -40,6 +40,17 @@ async def create_invite(
     """Generate an invite token for a household (admin only)."""
     token = secrets.token_urlsafe(16)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.INVITE_TOKEN_TTL_HOURS)
+
+    # Expire any existing active (non-expired, non-used) tokens for this household
+    await db.execute(
+        sql_update(InviteToken)
+        .where(
+            InviteToken.household_id == household_id,
+            InviteToken.used_at == None,  # noqa: E711
+            InviteToken.expires_at > datetime.now(timezone.utc),
+        )
+        .values(expires_at=datetime.now(timezone.utc))
+    )
 
     invite = InviteToken(
         household_id=household_id,
@@ -110,6 +121,5 @@ async def accept_invite(
     return HouseholdResponse(
         id=household.id,
         name=household.name,
-        rotation_pointer=household.rotation_pointer,
         created_at=household.created_at,
     )

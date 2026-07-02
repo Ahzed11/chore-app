@@ -24,5 +24,8 @@ class Settings(BaseSettings):
     # Chore instance generation
     INSTANCE_GENERATION_DAYS_AHEAD: int = 7
 
+    # Debug / development
+    DEBUG: bool = False
+
 
 settings = Settings()

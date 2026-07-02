@@ -101,6 +101,19 @@ async def create_chore(
 
     # Determine assignee
     if body.assignee_id is not None:
+        # Validate that the requested assignee is an active member of this household
+        member_check = await db.execute(
+            select(HouseholdMembership).where(
+                HouseholdMembership.household_id == household_id,
+                HouseholdMembership.user_id == body.assignee_id,
+                HouseholdMembership.is_active == True,  # noqa: E712
+            )
+        )
+        if member_check.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="assignee_id is not an active member of this household",
+            )
         # Manual assignment: use provided assignee, do NOT advance rotation pointer
         assignee_id = body.assignee_id
         assigned_manually = True

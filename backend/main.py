@@ -11,6 +11,7 @@ from app.api.invites import router as invites_router
 from app.api.leaderboard import router as leaderboard_router
 from app.api.members import router as members_router
 from app.api.users import router as users_router
+from app.core.config import settings
 from app.tasks.scheduler import start_scheduler, stop_scheduler
 
 
@@ -21,7 +22,18 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="ChoreApp API", version="0.1.0", lifespan=lifespan)
+docs_url = "/docs" if settings.DEBUG else None
+redoc_url = "/redoc" if settings.DEBUG else None
+openapi_url = "/openapi.json" if settings.DEBUG else None
+
+app = FastAPI(
+    title="ChoreApp API",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url,
+)
 
 
 @app.exception_handler(IntegrityError)

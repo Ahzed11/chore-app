@@ -47,7 +47,6 @@ async def create_household(
     return HouseholdResponse(
         id=household.id,
         name=household.name,
-        rotation_pointer=household.rotation_pointer,
         created_at=household.created_at,
     )
 
@@ -89,7 +88,6 @@ async def list_households(
         HouseholdWithRoleResponse(
             id=household.id,
             name=household.name,
-            rotation_pointer=household.rotation_pointer,
             created_at=household.created_at,
             role=role,
             member_count=count_map.get(household.id, 0),
@@ -125,7 +123,6 @@ async def get_household(
     return HouseholdDetailResponse(
         id=household.id,
         name=household.name,
-        rotation_pointer=household.rotation_pointer,
         created_at=household.created_at,
         member_count=member_count,
     )
@@ -155,6 +152,5 @@ async def update_household(
     return HouseholdResponse(
         id=household.id,
         name=household.name,
-        rotation_pointer=household.rotation_pointer,
         created_at=household.created_at,
     )

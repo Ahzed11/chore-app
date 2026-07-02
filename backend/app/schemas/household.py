@@ -18,7 +18,6 @@ class HouseholdResponse(BaseModel):
 
     id: uuid.UUID
     name: str
-    rotation_pointer: int
     created_at: datetime
 
 
@@ -29,7 +28,6 @@ class HouseholdWithRoleResponse(BaseModel):
 
     id: uuid.UUID
     name: str
-    rotation_pointer: int
     created_at: datetime
     role: str
     member_count: int
@@ -42,6 +40,5 @@ class HouseholdDetailResponse(BaseModel):
 
     id: uuid.UUID
     name: str
-    rotation_pointer: int
     created_at: datetime
     member_count: int
