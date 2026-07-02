@@ -27,5 +27,8 @@ class Settings(BaseSettings):
     # Debug / development
     DEBUG: bool = False
 
+    # CORS
+    CORS_ALLOWED_ORIGINS: list[str] = []
+
 
 settings = Settings()
