@@ -83,9 +83,10 @@ async def create_chore(
             detail="recurrence_rule is required when chore_type is 'recurring'",
         )
 
-    # Create the definition
+    # Create the definition — _membership.user_id is the authenticated admin's ID.
     definition = ChoreDefinition(
         household_id=household_id,
+        created_by_id=_membership.user_id,
         title=body.title,
         description=body.description,
         category=body.category,

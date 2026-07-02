@@ -16,6 +16,8 @@ class ChoreInstance(Base, TimestampMixin):
         UniqueConstraint("definition_id", "due_date", name="uq_chore_instance_definition_due_date"),
         Index("ix_chore_instances_household_status", "household_id", "status"),
         Index("ix_chore_instances_assignee", "assignee_id"),
+        Index("ix_chore_instances_due_date", "due_date"),
+        Index("ix_chore_instances_definition_id", "definition_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

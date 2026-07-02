@@ -105,6 +105,18 @@ async def generate_chore_instances(session: AsyncSession) -> None:
 
     assignment_service = AssignmentService(RoundRobinStrategy())
 
+    # Single bulk query — fetch all (definition_id, due_date) pairs that already
+    # have a ChoreInstance for any of the active definitions.  This replaces the
+    # previous per-definition SELECT inside the loop (N round-trips → 1).
+    if definitions:
+        existing_result = await session.execute(
+            select(ChoreInstance.definition_id, ChoreInstance.due_date)
+            .where(ChoreInstance.definition_id.in_([d.id for d in definitions]))
+        )
+        existing_pairs: set[tuple] = set(existing_result.all())
+    else:
+        existing_pairs = set()
+
     for definition in definitions:
         if not definition.recurrence_rule:
             logger.warning(
@@ -114,14 +126,6 @@ async def generate_chore_instances(session: AsyncSession) -> None:
             )
             continue
 
-        # Fetch the set of due dates that already have an instance so we can skip them.
-        existing_result = await session.execute(
-            select(ChoreInstance.due_date).where(
-                ChoreInstance.definition_id == definition.id
-            )
-        )
-        existing_due_dates: set[date] = set(existing_result.scalars().all())
-
         due_dates = _compute_due_dates(
             definition.first_due_date,
             definition.recurrence_rule,
@@ -129,7 +133,7 @@ async def generate_chore_instances(session: AsyncSession) -> None:
         )
 
         for due_date in due_dates:
-            if due_date in existing_due_dates:
+            if (definition.id, due_date) in existing_pairs:
                 continue  # already exists — idempotent guard
 
             assignee_id = await assignment_service.auto_assign(
@@ -147,8 +151,9 @@ async def generate_chore_instances(session: AsyncSession) -> None:
             session.add(instance)
 
             # Track locally so a second iteration within the same call cannot
-            # re-create the same date before the flush hits the database.
-            existing_due_dates.add(due_date)
+            # re-create the same (definition, date) pair before the flush hits
+            # the database.
+            existing_pairs.add((definition.id, due_date))
 
     await session.flush()
 
