@@ -1203,6 +1203,240 @@ Two maintenance issues in `app/tasks/scheduler.py`: the `_today()` helper uses l
 
 ---
 
+## TASK-045: Flutter — Fix Paginated Chores Response (Breaking)
+
+**Domain**: Flutter  
+**Priority**: Critical  
+**Depends on**: TASK-039 (backend pagination)  
+**Source**: `docs/frontend-report.md` §1, §4
+
+`chores_provider.dart:84` calls `dio.get<List<dynamic>>()` and then casts `response.data` directly to a list. After TASK-039, the backend returns `{"items": [...], "total": N, "limit": 50, "offset": 0}`. The cast will throw a `TypeError` at runtime and the chores screen will be stuck in an error state.
+
+**Steps**:
+1. Change the Dio call to `get<Map<String, dynamic>>()` in `_fetchChores`.
+2. Extract `response.data!['items'] as List<dynamic>` and map to `ChoreModel` objects.
+3. The `total`, `limit`, and `offset` fields are available if pagination UI is ever added; ignore them for now (the backend defaults `limit=50` which covers all typical household sizes).
+4. Run `flutter test` to verify `chore_list_screen_test.dart` still passes (the fake notifier returns the list directly so tests are unaffected).
+
+**Acceptance criteria**:
+- [ ] Chores screen loads correctly against the updated backend without runtime errors.
+- [ ] Existing widget tests are green.
+- [ ] Response envelope fields `total`, `limit`, `offset` are not silently discarded in a way that would break incremental pagination later (e.g., leave room to extend `_fetchChores` to accept a `limit`/`offset` param).
+
+---
+
+## TASK-046: Flutter — Implement Refresh Token Flow
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: TASK-033 (backend logout/refresh endpoints), TASK-038 (backend refresh endpoint)  
+**Source**: `docs/frontend-report.md` §1, §2
+
+The backend `POST /auth/login` response includes `refresh_token`, but `auth_provider.dart` only saves `access_token` to secure storage. When the access token expires, the user is silently logged out with no opportunity to refresh. The auth interceptor in `api_client.dart` calls `clearOnUnauthorized()` on any 401 instead of attempting a refresh first.
+
+**Steps**:
+1. Add `authRefresh` and `authLogout` constants to `api_endpoints.dart`.
+2. In `auth_state.dart`, extend `AuthStorage` to also store and retrieve `refresh_token` alongside `auth_token` (add a second key `refresh_token`).
+3. Extend `AuthNotifier` with a `refresh()` method that:
+   - Reads the stored refresh token.
+   - Calls `POST /auth/refresh` with `{"refresh_token": "..."}`.
+   - On success: saves the new `access_token` and `refresh_token`, updates `state`.
+   - On 401/error: calls `clearOnUnauthorized()` (forces re-login).
+4. Update `auth_provider.dart` (`AuthFormNotifier.login`) to save the `refresh_token` from the login response.
+5. Update the Dio error interceptor in `api_client.dart` to:
+   - On 401: call `authNotifier.refresh()`.
+   - If refresh succeeds: retry the original request with the new token.
+   - If refresh fails: call `clearOnUnauthorized()`.
+   - Guard against infinite loops with a "already retrying" flag.
+6. Add widget/integration tests covering: expired access token → refresh succeeds → request retried; expired access token → refresh fails → user logged out.
+
+**Acceptance criteria**:
+- [ ] Login response `refresh_token` is persisted to secure storage.
+- [ ] A 401 response triggers a refresh attempt before logging the user out.
+- [ ] Successful refresh causes the original request to be retried transparently.
+- [ ] Failed refresh causes `clearOnUnauthorized()` and navigation to login.
+- [ ] Refresh token is cleared from storage on logout.
+
+---
+
+## TASK-047: Flutter — Call POST /auth/logout on Logout
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: TASK-033 (backend logout endpoint), TASK-046  
+**Source**: `docs/frontend-report.md` §1, §4
+
+`AuthNotifier.logout()` in `auth_state.dart` currently only clears local secure storage. The backend's JWT blocklist (`RevokedToken` table) is never populated from the client, so the old access token remains valid on the server until its natural expiry.
+
+**Steps**:
+1. Add `ApiEndpoints.authLogout` constant (shared with TASK-046).
+2. In `AuthNotifier.logout()`, call `POST /auth/logout` with the current access token in the `Authorization: Bearer` header before clearing local storage.
+3. Also send the stored `refresh_token` in the request body so the backend can revoke it as well.
+4. Swallow network errors silently — if the server is unreachable, local logout should still complete.
+5. Clear both `auth_token` and `refresh_token` from secure storage after the API call (or on error).
+
+**Acceptance criteria**:
+- [ ] Logout calls `POST /auth/logout` before clearing tokens.
+- [ ] Network errors during logout do not block the local logout.
+- [ ] After logout, `GET /users/me` with the old token returns 401.
+- [ ] Refresh token is also cleared.
+
+---
+
+## TASK-048: Flutter — Fix Stale Widget Test Assertions in chore_list_screen_test.dart
+
+**Domain**: Flutter  
+**Priority**: High  
+**Source**: `docs/frontend-report.md` §3
+
+`test/features/chores/chore_list_screen_test.dart` references widget keys, widget types, and text strings that no longer match the actual `ChoreListScreen` implementation. These tests will fail. The screen uses plain `GestureDetector` text tabs (not `FilterChip` widgets), and the empty state text differs from what the tests expect.
+
+**Stale assertions to fix**:
+- Line 225: `find.byKey(Key('overdue_warning_icon'))` — `_StatusCircle` has no key on its `Icon`. Add `key: const Key('overdue_warning_icon')` to the `Icon(Icons.priority_high, ...)` in `chore_card.dart`.
+- Lines 253–259: `find.byKey(Key('status_chip_All'))` etc. — The screen uses `GestureDetector` text tabs, not `FilterChip`. Either:
+  - Add `Key('filter_tab_all')`, `Key('filter_tab_pending')`, etc. to the `GestureDetector` containers in `_ChoreFilterTabs`, **or**
+  - Rewrite tests to `find.text('All')`, `find.text('Pending')` etc.
+- Line 269: `tester.widget<FilterChip>(...)` — Replace with the actual widget type used in the tab.
+- Line 295: `find.byKey(Key('my_chores_chip'))` — "My Chores" is a bottom nav item, not a chip. Remove or replace with `find.text('My Chores')`.
+- Line 395: `find.text('No chores found')` — Actual text is `'All clear!'`. Update assertion.
+- Line 424: `find.text('Something went wrong')` — Verify the actual `AppErrorWidget` text and update.
+
+**Acceptance criteria**:
+- [ ] `flutter test test/features/chores/chore_list_screen_test.dart` passes with zero failures.
+- [ ] No test assertions are removed without a replacement — coverage must not decrease.
+
+---
+
+## TASK-049: Flutter — Add Missing ApiEndpoints Constants
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none (pure refactor enabling other tasks)  
+**Source**: `docs/frontend-report.md` §4
+
+`api_endpoints.dart` is missing constants for endpoints that exist in the backend but are not yet called from Flutter. Adding them now prevents future hardcoded URL strings.
+
+**Add the following static methods/constants**:
+```dart
+static String authLogout() => '/auth/logout';
+static String authRefresh() => '/auth/refresh';
+static String householdInvites(String householdId) =>
+    '/households/$householdId/invites';
+static String revokeInvite(String householdId, String inviteId) =>
+    '/households/$householdId/invites/$inviteId';
+static String choreAssignee(String householdId, String instanceId) =>
+    '/households/$householdId/chores/$instanceId/assignee';
+```
+
+Also fix the existing hardcoded URL in `chores_provider.dart:182`:
+```dart
+// Before
+await dio.delete<void>('/households/$householdId/chores/$definitionId');
+// After
+await dio.delete<void>(ApiEndpoints.choreDefinition(householdId, definitionId));
+```
+
+**Acceptance criteria**:
+- [ ] All five endpoint strings are added as named methods on `ApiEndpoints`.
+- [ ] `deleteChore` uses `ApiEndpoints.choreDefinition(...)` instead of a hardcoded string.
+- [ ] Existing tests are unaffected.
+
+---
+
+## TASK-050: Flutter — Configure Dio Request Timeouts
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Source**: `docs/frontend-report.md` §2
+
+The `Dio` instance in `api_client.dart` is created without connection or receive timeout options. If the server is unreachable (e.g., the local backend is not running), requests will hang indefinitely and the UI will be stuck in a loading state.
+
+**Steps**:
+1. In `api_client.dart`, set `BaseOptions` when creating the Dio instance:
+   ```dart
+   Dio(BaseOptions(
+     connectTimeout: const Duration(seconds: 10),
+     receiveTimeout: const Duration(seconds: 15),
+   ))
+   ```
+2. The timeout values should match the self-hosted nature of the app (local network, so 10s connect / 15s receive is generous).
+3. Ensure error-state widgets still render correctly when a `DioExceptionType.connectionTimeout` is thrown (test with a fake server URL if needed).
+
+**Acceptance criteria**:
+- [ ] Requests time out and surface an error widget within 15 seconds when the server is unreachable.
+- [ ] Existing tests that use fake notifiers are unaffected (they never reach Dio).
+
+---
+
+## TASK-051: Flutter — Use `pointsAwarded` for Weekly Points Calculation
+
+**Domain**: Flutter  
+**Priority**: Low  
+**Source**: `docs/frontend-report.md` §1
+
+`my_chores_screen.dart:115` computes weekly points with:
+```dart
+.fold(0, (sum, c) => sum + c.pointValue);
+```
+`pointValue` is a client-derived getter (`effortPoints[effortLevel] ?? 10`). The authoritative value is `pointsAwarded` from the server, stored as `ChoreModel.pointsAwarded`. These diverge if the backend ever awards bonus points or changes the effort-level mapping.
+
+**Steps**:
+1. In `my_chores_screen.dart`, change the fold to use `c.pointsAwarded ?? c.pointValue`.
+2. This falls back to the effort-based value if `pointsAwarded` is null (e.g., for chores completed before the field was added).
+
+**Acceptance criteria**:
+- [ ] Weekly points shown in the banner use `pointsAwarded` when available.
+- [ ] Falls back gracefully to `pointValue` when `pointsAwarded` is null.
+
+---
+
+## TASK-052: Flutter — Chore Reassignment UI (Admin)
+
+**Domain**: Flutter  
+**Priority**: Low  
+**Depends on**: TASK-039 (backend reassignment endpoint), TASK-049  
+**Source**: `docs/frontend-report.md` §1
+
+The backend `PATCH /households/{id}/chores/{iid}/assignee` endpoint lets admins reassign a chore instance to any household member. There is no Flutter UI for this. The admin long-press menu on `ChoreCard` currently only has "Delete series".
+
+**Steps**:
+1. Add a `reassignChore(instanceId, assigneeId)` method to `ChoresNotifier` that calls `PATCH` on `ApiEndpoints.choreAssignee(householdId, instanceId)`.
+2. In `ChoreCard._showAdminMenu`, add a second `ListTile` — "Reassign chore" — that opens a bottom sheet with a list of household members to choose from.
+3. The member list can be passed as a parameter to `ChoreCard` (already available from the parent screen via `membersNotifierProvider`).
+4. On selection, call `notifier.reassignChore(chore.id, selectedMemberId)`.
+5. Show a `SnackBar` on success or failure.
+
+**Acceptance criteria**:
+- [ ] Admin long-press on a pending chore shows "Reassign chore" in the action sheet.
+- [ ] Selecting a member sends `PATCH /households/{id}/chores/{iid}/assignee` with `{"assignee_id": "..."}`.
+- [ ] The chore card updates to show the new assignee name after reassignment.
+- [ ] Non-admin users do not see the reassign option.
+
+---
+
+## TASK-053: Flutter — Invite Management in Household Management Screen
+
+**Domain**: Flutter  
+**Priority**: Low  
+**Depends on**: TASK-040 (backend invite management endpoints), TASK-049  
+**Source**: `docs/frontend-report.md` §1
+
+The backend now supports listing active invite tokens (`GET /households/{id}/invites`) and revoking them (`DELETE /households/{id}/invites/{inviteId}`). The household management screen (`household_management_screen.dart`) shows a QR code and share button for the active invite, but does not show previously generated tokens or allow revocation.
+
+**Steps**:
+1. Create an `invitesProvider` (FutureProvider.family keyed by householdId) that calls `GET /households/{id}/invites` and returns `List<InviteTokenResponse>`.
+2. In the invite accordion section of `HouseholdManagementScreen`, below the current QR code, display a list of active invite tokens (masked preview from `token_preview`).
+3. Add a delete icon next to each token that calls `DELETE /households/{id}/invites/{inviteId}` and refreshes the invite list.
+4. Show an empty state ("No active invites") if the list is empty.
+
+**Acceptance criteria**:
+- [ ] Admin can see a list of active invite tokens with masked previews.
+- [ ] Admin can revoke any invite token.
+- [ ] List refreshes after revocation.
+- [ ] Non-admin members do not see this section.
+
+---
+
 ## Dependency Graph Summary
 
 ```
