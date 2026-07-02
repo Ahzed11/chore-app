@@ -1,17 +1,14 @@
 """
 Security utilities: password hashing and JWT token management.
-
-Stubs — full implementation comes in a later task.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from jose import jwt
-from passlib.context import CryptContext
+import bcrypt
+import jwt
+from jwt.exceptions import InvalidTokenError
 
 from app.core.config import settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ---------------------------------------------------------------------------
@@ -21,12 +18,12 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(plain: str) -> str:
     """Return a bcrypt hash of *plain*."""
-    return pwd_context.hash(plain)
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt(rounds=12)).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Return True if *plain* matches *hashed*."""
-    return pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 # ---------------------------------------------------------------------------
@@ -34,16 +31,24 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(subject: str) -> str:
     """Return a signed JWT encoding *subject* as the ``sub`` claim."""
-    if expires_delta is None:
-        expires_delta = timedelta(days=settings.JWT_EXPIRY_DAYS)
-
-    expire = datetime.now(tz=timezone.utc) + expires_delta
-    payload = {"sub": subject, "exp": expire, "jti": str(uuid.uuid4())}
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_EXPIRY_DAYS)
+    payload = {
+        "sub": subject,
+        "exp": expire,
+        "jti": str(uuid.uuid4()),
+    }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> dict:
-    """Decode and return the JWT payload.  Raises ``jose.JWTError`` on failure."""
-    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+def decode_access_token(token: str) -> dict | None:
+    """Decode and return the JWT payload, or None if the token is invalid."""
+    try:
+        return jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+    except InvalidTokenError:
+        return None
