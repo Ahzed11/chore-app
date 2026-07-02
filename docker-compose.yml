@@ -4,10 +4,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: choreapp
-      POSTGRES_PASSWORD: choreapp_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-choreapp_dev}
       POSTGRES_DB: choreapp
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -26,8 +26,8 @@ services:
     volumes:
       - ./backend:/app:z
     environment:
-      DATABASE_URL: postgresql+asyncpg://choreapp:choreapp_dev@db:5432/choreapp
-      JWT_SECRET: dev_secret_change_in_production
+      DATABASE_URL: postgresql+asyncpg://choreapp:${POSTGRES_PASSWORD:-choreapp_dev}@db:5432/choreapp
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env (see .env.example)}
       JWT_ALGORITHM: HS256
       JWT_EXPIRY_DAYS: 7
       APP_BASE_URL: http://localhost:8000
