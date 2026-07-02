@@ -8,6 +8,8 @@ Routes (all scoped to /households/{household_id}):
 """
 import uuid
 
+import structlog
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,7 @@ from app.schemas.member import MemberResponse, RoleUpdateRequest
 from app.services.redistribution import redistribute_chores_for_removed_member
 
 router = APIRouter(prefix="/households/{household_id}", tags=["members"])
+logger = structlog.get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +129,7 @@ async def remove_member(
 
     # Redistribute the removed member's open chores in the same transaction
     await redistribute_chores_for_removed_member(user_id, household_id, db)
+    logger.info("member.removed", household_id=str(household_id), removed_user_id=str(user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +175,12 @@ async def update_member_role(
 
     target.role = body.role
     await db.flush()
+    logger.info(
+        "member.role_changed",
+        household_id=str(household_id),
+        user_id=str(user_id),
+        new_role=body.role,
+    )
 
     # Resolve display_name for the response (User always exists if membership exists)
     user_result = await db.execute(select(User).where(User.id == user_id))

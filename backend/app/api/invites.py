@@ -3,6 +3,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select, update as sql_update
@@ -19,6 +20,7 @@ from app.schemas.household import HouseholdResponse
 from app.schemas.invite import InviteTokenResponse
 
 router = APIRouter(tags=["invites"])
+logger = structlog.get_logger()
 
 
 class InviteResponse(BaseModel):
@@ -113,6 +115,11 @@ async def accept_invite(
     db.add(membership)
     invite.used_at = now
     await db.flush()
+    logger.info(
+        "member.joined",
+        household_id=str(invite.household_id),
+        user_id=str(current_user.id),
+    )
 
     household_result = await db.execute(
         select(Household).where(Household.id == invite.household_id)

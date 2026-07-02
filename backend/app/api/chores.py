@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,7 @@ from app.schemas.chore import (
 from app.services.assignment import AssignmentService, get_assignment_service
 
 router = APIRouter(prefix="/households/{household_id}/chores", tags=["chores"])
+logger = structlog.get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,12 @@ async def complete_chore_instance(
         awarded_at=now,
     )
     db.add(ledger_entry)
+    logger.info(
+        "chore.completed",
+        chore_instance_id=str(instance_id),
+        user_id=str(current_user.id),
+        points=points_awarded,
+    )
 
     # Resolve assignee display name for the response.
     assignee_name: Optional[str] = None

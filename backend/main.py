@@ -1,11 +1,15 @@
+import logging
+import uuid as _uuid
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.api import auth, health
 from app.api.chores import router as chores_router
@@ -16,6 +20,19 @@ from app.api.members import router as members_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.tasks.scheduler import start_scheduler, stop_scheduler
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer() if not settings.DEBUG
+        else structlog.dev.ConsoleRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),
+)
 
 
 @asynccontextmanager
@@ -39,6 +56,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        request_id = str(_uuid.uuid4())
+        clear_contextvars()
+        bind_contextvars(request_id=request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
 app = FastAPI(
     title="ChoreApp API",
     version="0.1.0",
@@ -49,10 +76,13 @@ app = FastAPI(
 )
 
 # Middleware is applied in reverse registration order (last added = outermost).
-# SecurityHeadersMiddleware is registered first (inner layer).
+# SecurityHeadersMiddleware is registered first (innermost layer).
+# RequestIDMiddleware is registered second — wraps SecurityHeaders, seeds the
+# structlog context with a per-request UUID, and echoes it in X-Request-ID.
 # CORSMiddleware is registered last (outermost layer) so it handles preflight
 # before any other middleware runs.
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,

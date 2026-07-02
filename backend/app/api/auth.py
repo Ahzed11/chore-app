@@ -4,6 +4,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = structlog.get_logger()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -56,7 +58,16 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(body.password, user.password_hash):
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not verify_password(body.password, user.password_hash):
+        masked = body.email[0] + "***@" + body.email.split("@")[-1]
+        logger.warning("user.login_failed", email=masked)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -84,6 +95,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
     )
     await db.flush()
 
+    logger.info("user.login", user_id=str(user.id))
     return TokenResponse(
         access_token=access_token,
         expires_in=expires_in,

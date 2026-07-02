@@ -4,12 +4,12 @@ TASK-012: Provides generate_chore_instances, flag_overdue_instances, run_daily_j
 start_scheduler, and stop_scheduler. Integrate with FastAPI's lifespan event — see the
 comment block at the bottom of this module for the exact snippet to add to main.py.
 """
-import logging
-from datetime import date, timedelta
+import structlog
+from datetime import date, datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dateutil.relativedelta import relativedelta
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -18,7 +18,7 @@ from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
 from app.services.assignment import AssignmentService, RoundRobinStrategy
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -29,12 +29,13 @@ _scheduler: AsyncIOScheduler | None = None
 
 
 def _today() -> date:
-    """Return today's date in local time.
+    """Return today's date in UTC.
 
     Isolated into its own function so that test suites can monkeypatch it
-    without touching the built-in datetime.date class.
+    without touching the built-in datetime class.  Using UTC prevents
+    off-by-one errors near midnight when the server timezone is not UTC.
     """
-    return date.today()
+    return datetime.now(timezone.utc).date()
 
 
 def _compute_due_dates(
@@ -182,14 +183,29 @@ async def run_daily_job() -> None:
     This is the function registered with APScheduler.  It acquires its own
     ``AsyncSessionLocal`` session so that it is fully independent of any
     HTTP-request sessions.
+
+    A PostgreSQL advisory lock (``pg_try_advisory_xact_lock``) is acquired at
+    the start of the transaction so that only one worker executes the job when
+    the application is deployed with multiple Uvicorn workers.
     """
-    logger.info("Daily scheduler job starting")
+    logger.info("scheduler.daily_job.started")
     async with AsyncSessionLocal() as session:
+        # Try to acquire advisory lock — only one worker runs the job.
+        # The lock is held for the duration of the transaction and released
+        # automatically on commit or rollback.
+        result = await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+            {"lock_id": 99_001},
+        )
+        if not result.scalar():
+            logger.info("scheduler.daily_job.skipped", reason="lock_held_by_another_worker")
+            return
+
         try:
             await generate_chore_instances(session)
             await flag_overdue_instances(session)
             await session.commit()
-            logger.info("Daily scheduler job completed successfully")
+            logger.info("scheduler.daily_job.completed")
         except Exception:
             await session.rollback()
             logger.exception("Daily scheduler job failed; all changes rolled back")
