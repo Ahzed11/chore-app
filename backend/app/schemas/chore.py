@@ -1,22 +1,37 @@
 """Pydantic v2 schemas for chore endpoints."""
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Literal aliases that mirror the PostgreSQL enum values defined in the DB models.
+ChoreCategory = Literal[
+    "kitchen",
+    "bathroom",
+    "bedroom",
+    "living_room",
+    "laundry_room",
+    "garden_outdoor",
+    "garage",
+    "other_general",
+]
+EffortLevel = Literal["easy", "medium", "hard"]
+ChoreType = Literal["one_off", "recurring"]
+IntervalUnit = Literal["days", "weeks", "months"]
+
 
 class RecurrenceRule(BaseModel):
-    interval_unit: str  # "days" | "weeks" | "months"
-    interval_n: int = Field(ge=1)
+    interval_unit: IntervalUnit
+    interval_n: int = Field(ge=1, le=365)
 
 
 class ChoreCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: Optional[str] = None
-    category: str  # validated against enum values
-    effort_level: str  # "easy" | "medium" | "hard"
-    chore_type: str  # "one_off" | "recurring"
+    category: ChoreCategory
+    effort_level: EffortLevel
+    chore_type: ChoreType
     first_due_date: date
     recurrence_rule: Optional[RecurrenceRule] = None
     assignee_id: Optional[uuid.UUID] = None
@@ -25,8 +40,8 @@ class ChoreCreate(BaseModel):
 class ChoreUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
-    category: Optional[str] = None
-    effort_level: Optional[str] = None
+    category: Optional[ChoreCategory] = None
+    effort_level: Optional[EffortLevel] = None
     recurrence_rule: Optional[RecurrenceRule] = None
 
 

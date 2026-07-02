@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from app.api import auth, health
 from app.api.chores import router as chores_router
@@ -20,6 +22,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ChoreApp API", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+    """Convert any unhandled DB IntegrityError (unique/FK violations) to HTTP 409."""
+    return JSONResponse(status_code=409, content={"detail": "Resource conflict"})
 
 app.include_router(health.router)
 app.include_router(auth.router)

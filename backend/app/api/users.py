@@ -12,7 +12,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 class UpdateProfileRequest(BaseModel):
-    display_name: str = Field(min_length=1)
+    display_name: str = Field(min_length=1, max_length=100)
 
 
 @router.get("/me", response_model=UserResponse)
