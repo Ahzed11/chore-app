@@ -112,7 +112,7 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                   .where((c) =>
                       c.completedAt != null &&
                       !c.completedAt!.isBefore(weekStart))
-                  .fold(0, (sum, c) => sum + c.pointValue);
+                  .fold(0, (sum, c) => sum + (c.pointsAwarded ?? c.pointValue));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

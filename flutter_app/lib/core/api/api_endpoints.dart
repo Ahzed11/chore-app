@@ -22,4 +22,11 @@ class ApiEndpoints {
       '/households/$hId/chores/$cId/complete';
   static String leaderboard(String id) => '/households/$id/leaderboard';
   static String acceptInvite(String token) => '/invites/$token/accept';
+
+  static String authLogout() => '/auth/logout';
+  static String authRefresh() => '/auth/refresh';
+  static String revokeInvite(String householdId, String inviteId) =>
+      '/households/$householdId/invites/$inviteId';
+  static String choreAssignee(String householdId, String instanceId) =>
+      '/households/$householdId/chores/$instanceId/assignee';
 }

@@ -81,13 +81,13 @@ class ChoresNotifier
       queryParams['assignee_id'] = assigneeId;
     }
 
-    final response = await dio.get<List<dynamic>>(
+    final response = await dio.get<Map<String, dynamic>>(
       ApiEndpoints.householdChores(householdId),
       queryParameters: queryParams.isEmpty ? null : queryParams,
     );
 
-    final data = response.data ?? [];
-    return data
+    final items = response.data!['items'] as List<dynamic>;
+    return items
         .cast<Map<String, dynamic>>()
         .map(ChoreModel.fromJson)
         .toList();
@@ -179,7 +179,7 @@ class ChoresNotifier
     final householdId = arg;
     final dio = ref.read(dioProvider);
     await dio.delete<void>(
-      '/households/$householdId/chores/$definitionId',
+      ApiEndpoints.choreDefinition(householdId, definitionId),
     );
     ref.invalidateSelf();
     await future;
