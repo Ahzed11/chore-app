@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_DAYS: int = 7
 
+    # Refresh tokens
+    REFRESH_TOKEN_TTL_DAYS: int = 30
+
     # Application
     APP_BASE_URL: str = "http://localhost:8000"
 
