@@ -6,7 +6,9 @@ import 'package:chore_app/features/chores/providers/chores_provider.dart';
 import 'package:chore_app/features/chores/screens/chore_list_screen.dart';
 import 'package:chore_app/features/chores/widgets/chore_card.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
+import 'package:chore_app/features/household/models/member_model.dart';
 import 'package:chore_app/features/household/providers/household_provider.dart';
+import 'package:chore_app/features/household/providers/members_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:chore_app/shared/widgets/loading_widget.dart';
 import 'package:flutter/material.dart';
@@ -129,6 +131,11 @@ class _DataHouseholdsNotifier extends HouseholdsNotifier {
   Future<List<HouseholdModel>> build() async => _households;
 }
 
+class _FakeMembersNotifier extends MembersNotifier {
+  @override
+  Future<List<MemberModel>> build(String arg) async => const [];
+}
+
 // ---------------------------------------------------------------------------
 // Widget builder helpers
 // ---------------------------------------------------------------------------
@@ -145,6 +152,7 @@ Widget _buildScreen({
       householdsNotifierProvider.overrideWith(
         () => _DataHouseholdsNotifier(households ?? [_household()]),
       ),
+      membersNotifierProvider.overrideWith(_FakeMembersNotifier.new),
       choreFilterNotifierProvider.overrideWith(
         () => _FixedFilterNotifier(initialFilter),
       ),
@@ -223,7 +231,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byKey(const Key('overdue_warning_icon')), findsOneWidget);
+      expect(find.byIcon(Icons.priority_high), findsOneWidget);
     });
 
     testWidgets('non-overdue chore does not show warning icon', (tester) async {
@@ -240,75 +248,85 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byKey(const Key('overdue_warning_icon')), findsNothing);
+      expect(find.byIcon(Icons.priority_high), findsNothing);
     });
 
     // -------------------------------------------------------------------------
-    // Status filter chip changes selected status
+    // Status filter tabs
     // -------------------------------------------------------------------------
-    testWidgets('status filter chips are present', (tester) async {
+    testWidgets('status filter tabs are present', (tester) async {
       await tester.pumpWidget(
         _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
       );
       await tester.pump();
 
-      expect(find.byKey(const Key('status_chip_All')), findsOneWidget);
-      expect(find.byKey(const Key('status_chip_Pending')), findsOneWidget);
-      expect(find.byKey(const Key('status_chip_Overdue')), findsOneWidget);
-      expect(find.byKey(const Key('status_chip_Complete')), findsOneWidget);
+      // The filter row renders GestureDetector+Text tabs, not FilterChips.
+      // Labels come from const _filterTabs = ['All', 'Pending', 'Overdue', 'Done'].
+      expect(find.text('All'), findsOneWidget);
+      expect(find.text('Pending'), findsOneWidget);
+      expect(find.text('Overdue'), findsOneWidget);
+      expect(find.text('Done'), findsOneWidget);
     });
 
-    testWidgets('Pending filter chip can be tapped', (tester) async {
+    testWidgets('Pending filter tab can be tapped', (tester) async {
       await tester.pumpWidget(
         _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
       );
       await tester.pump();
 
-      // Tap the Pending chip
-      await tester.tap(find.byKey(const Key('status_chip_Pending')));
+      // Tap the Pending tab text.
+      await tester.tap(find.text('Pending'));
       await tester.pump();
 
-      final chip = tester.widget<FilterChip>(
-        find.byKey(const Key('status_chip_Pending')),
-      );
-      expect(chip.selected, isTrue);
+      // The empty state for the 'pending' filter shows 'Nothing pending',
+      // confirming the tap changed the active filter.
+      expect(find.text('Nothing pending'), findsOneWidget);
     });
 
-    testWidgets('"All" status chip is selected by default', (tester) async {
+    testWidgets('"All" filter tab is active by default', (tester) async {
+      // Provide both a pending and a complete chore. If the default filter
+      // were anything other than 'all', at least one would be hidden.
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Pending chore',
+          status: 'pending',
+          dueDate: DateTime(2027, 1, 1),
+        ),
+        _chore(id: 'c2', title: 'Done chore', status: 'complete'),
+      ];
       await tester.pumpWidget(
-        _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
       );
       await tester.pump();
 
-      final chip = tester.widget<FilterChip>(
-        find.byKey(const Key('status_chip_All')),
-      );
-      expect(chip.selected, isTrue);
+      // Both chores visible → the 'all' filter is active by default.
+      expect(find.text('Pending chore'), findsOneWidget);
+      expect(find.text('Done chore'), findsOneWidget);
     });
 
     // -------------------------------------------------------------------------
-    // "My chores" toggle chip is present
+    // "My Chores" bottom navigation item is present
     // -------------------------------------------------------------------------
-    testWidgets('"My Chores" toggle chip is present', (tester) async {
+    testWidgets('"My Chores" bottom nav item is present', (tester) async {
       await tester.pumpWidget(
         _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
       );
       await tester.pump();
 
-      expect(find.byKey(const Key('my_chores_chip')), findsOneWidget);
+      // 'My Chores' is now a BottomNavigationBarItem, not a chip.
+      expect(find.text('My Chores'), findsOneWidget);
     });
 
-    testWidgets('"My Chores" chip label is displayed in filter bar',
+    testWidgets('"My Chores" label is visible in the bottom navigation bar',
         (tester) async {
       await tester.pumpWidget(
         _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
       );
       await tester.pump();
 
-      // The chip key is unique; "My Chores" text appears in both chip and
-      // bottom nav bar so we verify via the chip key.
-      expect(find.byKey(const Key('my_chores_chip')), findsOneWidget);
-      expect(find.text('My Chores'), findsAtLeastNWidgets(1));
+      // 'My Chores' appears as a label in the bottom navigation bar.
+      expect(find.text('My Chores'), findsOneWidget);
     });
 
     // -------------------------------------------------------------------------
@@ -354,6 +372,7 @@ void main() {
             householdsNotifierProvider.overrideWith(
               () => _DataHouseholdsNotifier([_household()]),
             ),
+            membersNotifierProvider.overrideWith(_FakeMembersNotifier.new),
             choreFilterNotifierProvider.overrideWith(
               () => _FixedFilterNotifier(const ChoreFilter()),
             ),
@@ -392,7 +411,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('No chores found'), findsOneWidget);
+      expect(find.text('All clear!'), findsOneWidget);
       expect(find.byKey(const Key('empty_state_icon')), findsOneWidget);
     });
 
@@ -431,16 +450,25 @@ void main() {
     testWidgets('only shows pending chores when pending filter active',
         (tester) async {
       final chores = [
-        _chore(id: 'c1', title: 'Pending task', status: 'pending'),
+        // Future due date keeps isOverdue == false so the pending filter shows it.
+        _chore(
+          id: 'c1',
+          title: 'Pending task',
+          status: 'pending',
+          dueDate: DateTime(2027, 12, 31),
+        ),
         _chore(id: 'c2', title: 'Complete task', status: 'complete'),
       ];
 
       await tester.pumpWidget(
         _buildScreen(
           choresNotifier: () => _DataChoresNotifier(chores),
-          initialFilter: const ChoreFilter(status: 'pending'),
         ),
       );
+      await tester.pump();
+
+      // The screen uses local state for filtering; tap the tab to activate it.
+      await tester.tap(find.text('Pending'));
       await tester.pump();
 
       expect(find.text('Pending task'), findsOneWidget);
