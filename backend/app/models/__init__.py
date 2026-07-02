@@ -5,6 +5,7 @@ from app.models.invite_token import InviteToken
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
 from app.models.point_ledger import PointLedger
+from app.models.revoked_token import RevokedToken
 
 __all__ = [
     "User",
@@ -14,4 +15,5 @@ __all__ = [
     "ChoreDefinition",
     "ChoreInstance",
     "PointLedger",
+    "RevokedToken",
 ]

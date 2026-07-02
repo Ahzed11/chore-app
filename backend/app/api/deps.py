@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.household_membership import HouseholdMembership
+from app.models.revoked_token import RevokedToken
 from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -39,6 +40,18 @@ async def get_current_user(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    jti: str | None = payload.get("jti")
+    if jti:
+        revoked_result = await db.execute(
+            select(RevokedToken).where(RevokedToken.jti == jti)
+        )
+        if revoked_result.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     user_id_str: str | None = payload.get("sub")
     if not user_id_str:

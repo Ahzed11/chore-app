@@ -193,3 +193,57 @@ async def test_jwt_contains_user_id(async_client: AsyncClient) -> None:
 
     payload = decode_access_token(token)
     assert payload["sub"] == user_id
+
+
+# ---------------------------------------------------------------------------
+# Logout tests
+# ---------------------------------------------------------------------------
+
+
+async def _login(client: AsyncClient) -> str:
+    """Register alice and return her access token."""
+    await _register(client)
+    response = await client.post(
+        "/auth/login",
+        json={
+            "email": _VALID_REGISTER_PAYLOAD["email"],
+            "password": _VALID_REGISTER_PAYLOAD["password"],
+        },
+    )
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_logout_invalidates_token(async_client: AsyncClient) -> None:
+    """After logout the same token must be rejected by authenticated endpoints."""
+    token = await _login(async_client)
+
+    # Confirm the token works before logging out.
+    me_before = await async_client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert me_before.status_code == 200
+
+    # Logout — revokes the jti.
+    logout_response = await async_client.post(
+        "/auth/logout",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert logout_response.status_code == 200
+    assert logout_response.json() == {"message": "Logged out successfully"}
+
+    # The same token must now be rejected by get_current_user.
+    me_after = await async_client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert me_after.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_logout_requires_valid_token(async_client: AsyncClient) -> None:
+    """Calling /auth/logout without a token must return 401."""
+    response = await async_client.post("/auth/logout")
+    assert response.status_code == 401

@@ -3,6 +3,7 @@ Security utilities: password hashing and JWT token management.
 
 Stubs — full implementation comes in a later task.
 """
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from jose import jwt
@@ -39,7 +40,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
         expires_delta = timedelta(days=settings.JWT_EXPIRY_DAYS)
 
     expire = datetime.now(tz=timezone.utc) + expires_delta
-    payload = {"sub": subject, "exp": expire}
+    payload = {"sub": subject, "exp": expire, "jti": str(uuid.uuid4())}
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
