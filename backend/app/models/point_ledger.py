@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -13,6 +13,7 @@ class PointLedger(Base):
     __tablename__ = "point_ledger"
     __table_args__ = (
         Index("ix_point_ledger_household_user_awarded", "household_id", "user_id", "awarded_at"),
+        UniqueConstraint("chore_instance_id", name="uq_point_ledger_chore_instance"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

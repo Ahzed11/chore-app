@@ -88,6 +88,60 @@ class AssignmentService:
             assignments[instance_id] = new_assignee
         return assignments
 
+    async def redistribute_chores_bulk(
+        self,
+        chore_instance_ids: list[uuid.UUID],
+        household_id: uuid.UUID,
+        session: AsyncSession,
+    ) -> dict[uuid.UUID, uuid.UUID | None]:
+        """Bulk reassign chore instances via round-robin using a single lock acquisition.
+
+        Acquires SELECT FOR UPDATE on the household row once, cycles through active
+        members in Python using the current rotation_pointer, then writes the updated
+        pointer once after the loop — O(1) lock acquisitions instead of O(N).
+
+        Returns a mapping of {chore_instance_id: new_assignee_id}.
+        """
+        if not chore_instance_ids:
+            return {}
+
+        # 1. Single SELECT FOR UPDATE — acquire the row lock once for the whole batch.
+        result = await session.execute(
+            select(Household)
+            .where(Household.id == household_id)
+            .with_for_update()
+        )
+        household = result.scalar_one_or_none()
+        if household is None:
+            return {cid: None for cid in chore_instance_ids}
+
+        # 2. Fetch active members ordered by joined_at ASC (same ordering as
+        #    RoundRobinStrategy.assign so rotation behaviour is identical).
+        members_result = await session.execute(
+            select(HouseholdMembership.user_id)
+            .where(
+                HouseholdMembership.household_id == household_id,
+                HouseholdMembership.is_active == True,  # noqa: E712
+            )
+            .order_by(HouseholdMembership.joined_at.asc())
+        )
+        member_ids = members_result.scalars().all()
+
+        if not member_ids:
+            return {cid: None for cid in chore_instance_ids}
+
+        # 3. Cycle through members in Python.
+        assignments: dict[uuid.UUID, uuid.UUID | None] = {}
+        pointer = household.rotation_pointer
+        for instance_id in chore_instance_ids:
+            assignments[instance_id] = member_ids[pointer % len(member_ids)]
+            pointer += 1
+
+        # 4. Write the updated pointer once (single UPDATE on commit).
+        household.rotation_pointer = pointer
+
+        return assignments
+
 
 def get_assignment_service() -> AssignmentService:
     """FastAPI dependency: returns AssignmentService with RoundRobinStrategy."""

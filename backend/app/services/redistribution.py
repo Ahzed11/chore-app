@@ -107,11 +107,12 @@ async def redistribute_chores_for_removed_member(
             for chore in chores:
                 chore.assignee_id = None
         else:
-            # FR-042: redistribute via round-robin; each assign() call advances
-            # the household.rotation_pointer by 1 (autoflush ensures the DB sees
-            # each increment before the next read within the same transaction).
+            # FR-042: redistribute via round-robin using a single lock acquisition
+            # — SELECT FOR UPDATE on the household happens once, members are
+            # cycled in Python, and rotation_pointer is written once after the
+            # loop (O(1) round-trips instead of O(N)).
             service = AssignmentService(RoundRobinStrategy())
-            assignments = await service.redistribute_chores(chore_ids, household_id, session)
+            assignments = await service.redistribute_chores_bulk(chore_ids, household_id, session)
             for chore_id, new_assignee in assignments.items():
                 if chore_id in chore_map:
                     chore_map[chore_id].assignee_id = new_assignee
