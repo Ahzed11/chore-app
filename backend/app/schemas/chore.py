@@ -80,3 +80,14 @@ class ChoreDefinitionResponse(BaseModel):
     is_active: bool
     created_at: datetime
     first_instance: Optional[ChoreInstanceResponse] = None
+
+
+class ChoreReassignRequest(BaseModel):
+    assignee_id: uuid.UUID | None = None
+
+
+class PaginatedChoreResponse(BaseModel):
+    items: list[ChoreInstanceResponse]
+    total: int
+    limit: int
+    offset: int
