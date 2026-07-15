@@ -19,7 +19,8 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects — see TASK-054+ (notably: TASK-047's logout call is defeated by a caller bug; TASK-050 missed the refresh Dio; TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
 | TASK-054 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
-| TASK-068 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`). **Start with TASK-068 (broken login), then TASK-069 (CI on all branches).** |
+| TASK-068 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored on `create_access_token`), stale integration test fixed; 137/137 tests pass. Coverage gate (68% vs 75%) remains → TASK-069. |
+| TASK-069 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`). **Start with TASK-069 (CI on all branches + coverage gate).** |
 
 ---
 

@@ -31,9 +31,15 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def create_access_token(subject: str) -> str:
-    """Return a signed JWT encoding *subject* as the ``sub`` claim."""
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_EXPIRY_DAYS)
+def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+    """Return a signed JWT encoding *subject* as the ``sub`` claim.
+
+    *expires_delta* overrides the default lifetime of
+    ``JWT_EXPIRY_DAYS`` days (used by tests to mint expired tokens).
+    """
+    if expires_delta is None:
+        expires_delta = timedelta(days=settings.JWT_EXPIRY_DAYS)
+    expire = datetime.now(timezone.utc) + expires_delta
     payload = {
         "sub": subject,
         "exp": expire,
