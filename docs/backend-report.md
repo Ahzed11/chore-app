@@ -1,382 +1,145 @@
 # Backend Report — ChoreApp API
 
-**Date:** 2026-07-01  
-**Branch:** master (`a79405f`)  
-**Stack:** FastAPI 0.138+, SQLAlchemy 2.0 async, PostgreSQL (asyncpg), APScheduler 3.x, Pydantic v2, Python 3.12
+**Date:** 2026-07-15 (supersedes the 2026-07-01 report)
+**Branch:** `claude/brave-ritchie-1owy48`
+**Stack:** FastAPI 0.138+, SQLAlchemy 2.0 async, PostgreSQL (asyncpg), APScheduler 3.x, Pydantic v2, PyJWT, bcrypt 5.x, Python 3.12
+
+> This review ran the full test suite against a local PostgreSQL 16 (137 tests), applied migrations to a fresh database (clean, zero autogenerate drift), and verified several findings live against a running server.
 
 ---
 
 ## Executive Summary
 
-The backend is a well-structured FastAPI application with a clean three-layer architecture, correct async patterns, solid transaction management, and a meaningful test suite. The core business logic (chore lifecycle, leaderboard, household management, invite system) is largely correct and bug-free.
+Nearly all of the 2026-07-01 report's findings were fixed (TASK-028..044), and the fixes are genuine: IDOR closed, JWT revocation + refresh implemented, enums validated, Dockerfile hardened, scheduler UTC + advisory-locked, invite management and reassignment endpoints added.
 
-However, the application is **not ready for production** in its current state. Two critical security issues must be fixed first: credentials are committed to git, and unauthenticated users can read any household's chores. Beyond those, there are significant gaps in the operational layer (rate limiting, token revocation, observability, deployment hardening) and several schema validation gaps that produce HTTP 500s instead of clean 422s.
+However, this review found one **showstopper regression**: **`POST /auth/login` returns HTTP 500 on every call.** TASK-042 removed the `expires_delta` parameter from `create_access_token`, but `app/api/auth.py:78-81` still passes it. 68 of 137 tests fail on this single error. The branch merged without CI ever running — CI only triggers on `main`/`master` — which is the systemic issue behind it.
+
+Beyond that: rate limiting (TASK-031) was never implemented, access tokens still live 7 days (defeating the refresh/revocation system), pagination has no ORDER BY, and the self-hosting operational layer (production compose file, startup migrations, backups, README) doesn't exist yet.
 
 | Category | Score |
 |---|---|
-| Code Quality | 7 / 10 |
-| Architecture | 7 / 10 |
-| Error Handling | 6.5 / 10 |
-| Type Safety | 6 / 10 |
-| Test Coverage | 6.5 / 10 |
-| Maintainability | 7 / 10 |
-| **Overall Code Quality** | **7.0 / 10** |
-| **Security Rating** | **4.5 / 10** |
-| **Implementation Completeness** | **~72%** |
+| Code Quality | 7.5 / 10 |
+| Architecture | 7.5 / 10 |
+| Security | 6.5 / 10 (was 4.5) |
+| Test Suite | 6 / 10 (broken gate, slow, 68 failing due to C1) |
+| Self-Hosting Readiness | 4 / 10 |
 
 ---
 
-## 1. Implementation Completeness
+## 1. Verification of Previous Findings (TASK-028..044)
 
-### Feature Completion by Domain
-
-| Domain | Completion | Notes |
+| Old finding | Status | Evidence |
 |---|---|---|
-| Authentication | 70% | Register + login solid; no token refresh, no revocation, no password reset |
-| User profile | 60% | GET + PATCH display_name; no password change, no account deletion |
-| Households CRUD | 80% | Create/list/get/rename; no delete |
-| Members management | 90% | List, remove, role-change, leave — all with admin guards |
-| Invites | 70% | Generate + accept; no list-active or revoke |
-| Chores CRUD | 80% | Full definition lifecycle, instance completion, filtering; no reassign, no skip, no pagination |
-| Leaderboard | 90% | Three scopes, dense ranking, zero-point members included |
-| Background scheduler | 80% | Daily generate + flag-overdue, idempotent; not safe under multiple workers |
-| Testing | 85% | Wide coverage; fixture code heavily duplicated |
-| Security hardening | 50% | JWT works; no rate limiting, no security headers, no CORS, no revocation |
-| Deployment readiness | 50% | Dockerfile exists; no health check, runs as root, no migration step on startup |
-| Observability | 10% | stdlib `logging` only; no structured logs, no metrics, no tracing |
-
-### Implemented Endpoints (26 total)
-
-| Method | Path | Status | Notes |
-|---|---|---|---|
-| POST | `/auth/register` | Complete | Email uniqueness check, 409 on collision |
-| POST | `/auth/login` | Complete | Enumeration-hardened 401 |
-| GET | `/users/me` | Complete | |
-| PATCH | `/users/me` | Complete | `display_name` only |
-| POST | `/households` | Complete | Creator becomes admin |
-| GET | `/households` | Complete | Includes role + member count via subquery |
-| GET | `/households/{id}` | Complete | Member count |
-| PATCH | `/households/{id}` | Complete | Rename, admin only |
-| GET | `/households/{id}/members` | Complete | |
-| DELETE | `/households/{id}/members/{uid}` | Complete | Redistribution on remove |
-| PATCH | `/households/{id}/members/{uid}/role` | Complete | Sole-admin guard |
-| POST | `/households/{id}/leave` | Complete | Sole-admin guard |
-| POST | `/households/{id}/invites` | Complete | |
-| POST | `/invites/{token}/accept` | Complete | Idempotency check |
-| POST | `/households/{id}/chores` | Complete | Creates definition + first instance, round-robin or manual |
-| GET | `/households/{id}/chores` | **Partial** | No pagination; **authorization bug** (see §2) |
-| GET | `/households/{id}/chores/{iid}` | **Partial** | **Authorization bug** (see §2) |
-| POST | `/households/{id}/chores/{iid}/complete` | Complete | Row locking, PointLedger, assignee-only guard |
-| PATCH | `/households/{id}/chores/{did}` | Complete | Partial update via `exclude_unset` |
-| DELETE | `/households/{id}/chores/{did}` | Complete | Soft-delete, cancels pending instances |
-| GET | `/households/{id}/leaderboard` | Complete | `all_time`, `this_week`, `this_month` |
-| GET | `/health` | Stub | Returns `{"status": "ok"}` without DB probe |
-
-### What Is Missing
-
-**High-priority (blocking production):**
-- No rate limiting on any endpoint — auth endpoints are open to brute-force
-- Authorization bypass on chore read endpoints (any authenticated user can read any household)
-- No token refresh or revocation endpoint
-- No pagination on `GET /chores` — unbounded SELECT on a table that grows indefinitely
-- Recurrence rule key mismatch: schema uses `interval_unit`/`interval_n`, some tests and integration paths send `unit`/`interval`
-
-**Medium-priority (feature gaps):**
-- No chore reassignment endpoint (`PATCH /chores/{iid}/reassign`)
-- No invite management (`GET /invites`, `DELETE /invites/{token}`)
-- No household deletion
-- No password change or reset flow
-- No push notifications for assignments, due dates, or overdue chores
-- Shallow health check — cannot distinguish app alive vs. DB alive
-
-**Low-priority (polish):**
-- No API versioning (`/api/v1/`)
-- No CORS middleware
-- No security headers
-- No structured logging or request IDs
-- No Prometheus/OpenTelemetry metrics
-- `rotation_pointer` exposed in all household responses — internal implementation detail
+| SEC-001 committed `.env` | **Fixed** | Untracked, gitignored, dockerignored; `git log --all -- backend/.env` empty |
+| SEC-002 weak JWT secret | **Partial** | Compose requires `${JWT_SECRET:?}`; but `config.py:11` accepts any string — no min-length/placeholder validation |
+| SEC-003 IDOR on chore reads | **Fixed** | `chores.py:185,240` use `require_household_member`; non-member 403 tested |
+| SEC-004 rate limiting (TASK-031) | **NOT DONE** | No limiter anywhere in `backend/` — the only TASK-028..044 item never implemented |
+| SEC-005 root container | **Fixed** | Multi-stage Dockerfile, `USER appuser`, `HEALTHCHECK` |
+| SEC-006 revocation/logout | **Fixed** | `jti` claim, `revoked_tokens` checked in `deps.py:42-52`, `POST /auth/logout`. Caveats: double logout → 409, no cleanup job (M1, M2) |
+| Token refresh (TASK-038) | **Fixed** | Hashed stored tokens + rotation — but see C1 for the login regression that rode in alongside |
+| SEC-007 enum validation | **Fixed for bodies only** | `schemas/chore.py:9-21` uses `Literal`s; query params `status_filter`/`category` still plain `str` → verified live HTTP 500 (H5) |
+| Pagination (TASK-039) | **Fixed, with a bug** | No ORDER BY on the paged query (H3) |
+| N+1 (TASK-041) | **Mostly fixed** | Scheduler pre-fetch + bulk redistribution; remaining per-instance `auto_assign` loop in `scheduler.py:140-142` (M11) |
+| SEC-016 scheduler UTC | **Fixed in scheduler only** | `leaderboard.py:32-34` still uses local `date.today()` (M9) |
+| Advisory lock (TASK-044) | **Fixed** | `pg_try_advisory_xact_lock` in `scheduler.py:196-201` |
+| Health check | **Fixed** | `SELECT 1`, 503 on failure |
+| Headers/CORS (TASK-037) | **Fixed** | `main.py:50-92`; docs disabled when `DEBUG=false`; length constraints in place |
+| Invite management (TASK-040) | **Fixed** | List + revoke endpoints, single-active-invite cap |
+| Reassignment endpoint | **Fixed** | `chores.py:372-449` with member validation (no terminal-status guard — L3) |
+| Fixtures (TASK-036) | **Fixed, gate broken** | Single conftest; but `--cov-fail-under=75` fails at 68% actual coverage (H4) |
+| `rotation_pointer` exposure | **Fixed** | Absent from response schemas |
+| Deps (TASK-042) | **Fixed — introduced C1** | bcrypt 5.x + PyJWT; login call site not updated |
+| SEC-020/022 `--reload` + bind mount in compose | **NOT fixed** | `docker-compose.yml:26,37` — still a dev config, and it's the only compose file (M4) |
+| Leaderboard 23:59:59 window gap | **NOT fixed** | `leaderboard.py:54,62` (M9) |
 
 ---
 
-## 2. Security Audit
-
-**Overall Security Rating: 4.5 / 10** — Not suitable for production without addressing Critical and High findings.
-
-| Severity | Count |
-|---|---|
-| Critical | 2 |
-| High | 4 |
-| Medium | 8 |
-| Low | 9 |
+## 2. Findings
 
 ### Critical
 
-**SEC-001 — Credentials committed to version control**  
-`backend/.env` is not excluded by `.gitignore` and is committed to the repository. It contains a live `DATABASE_URL` and `JWT_SECRET`. `docker-compose.yml` also hardcodes credentials.
-
-*Impact:* Full database access + ability to forge arbitrary JWT tokens for any user.
-
-*Fix:*
-1. Add `.env` to `backend/.gitignore` immediately.
-2. Rotate the PostgreSQL password and `JWT_SECRET` now.
-3. Purge the file from git history (BFG Repo-Cleaner or `git filter-branch`).
-4. In `docker-compose.yml`, use `env_file: .env` rather than inline values.
-5. Add `git-secrets` or `trufflehog` to CI to prevent future leakage.
-
----
-
-**SEC-002 — Weak, predictable JWT signing secret**  
-Both `.env` (`test-secret-for-local-dev-change-in-production`) and `docker-compose.yml` (`dev_secret_change_in_production`) use human-readable, low-entropy secrets. A captured JWT can be cracked offline.
-
-*Fix:* Generate a cryptographically random secret (`python -c "import secrets; print(secrets.token_hex(32))"`) and validate minimum length at startup in `config.py`.
-
----
+**C1. [Bug/Regression] `POST /auth/login` is completely broken — every login returns HTTP 500**
+`app/api/auth.py:78-81` calls `create_access_token(subject=..., expires_delta=expires_delta)`, but TASK-042 (commit `b231179`) removed the `expires_delta` parameter from `app/core/security.py:34`. `TypeError` on every login; **68 of 137 tests fail** on this one error. `tests/test_auth_middleware.py:101` also calls the removed kwarg. With a one-line patch applied locally, the suite goes to 136 passed / 1 failed (the 1 is H6).
+*Fix:* restore `expires_delta: timedelta | None = None` on `create_access_token`, or drop the kwarg at both call sites. Root cause is H4 (no CI on working branches).
 
 ### High
 
-**SEC-003 — IDOR: Chore read endpoints missing household membership check**  
-`app/api/chores.py:164` and `app/api/chores.py:203` use `Depends(get_current_user)` instead of `Depends(require_household_member)`. Any authenticated user who knows a household UUID can enumerate all chore instances and assignees.
+**H1. [Security] No rate limiting on `/auth/login` and `/auth/register`** — TASK-031 never implemented. Unlimited credential stuffing; combined with register's 409 email enumeration, the biggest remaining auth gap. Self-hosted instances are commonly internet-exposed for family phones. *Fix:* `slowapi` with in-memory storage (fine for a single-process self-host), ~5/min login, ~3/min register per client IP.
 
-*Fix:*
-```python
-# chores.py — list_chores and get_chore_instance
-_membership: HouseholdMembership = Depends(require_household_member)  # replace get_current_user
-```
+**H2. [Security] 7-day access tokens defeat the revocation/refresh system** — `config.py:13` `JWT_EXPIRY_DAYS: int = 7` while rotated 30-day refresh tokens exist and the Flutter app implements the refresh flow. A stolen access token stays valid for 7 days. *Fix:* switch to `JWT_EXPIRY_MINUTES` (15–60 min).
 
----
+**H3. [Bug] `GET /chores` pagination has no ORDER BY** — `chores.py:210-217`: `LIMIT/OFFSET` without ordering means pages can repeat/skip rows. *Fix:* `.order_by(ChoreInstance.due_date, ChoreInstance.id)`.
 
-**SEC-004 — No rate limiting on auth endpoints**  
-`POST /auth/login` and `POST /auth/register` accept unlimited requests. Enables credential stuffing and account enumeration at scale.
+**H4. [Operational] CI never runs on working branches; the coverage gate fails anyway** — `.github/workflows/ci.yml` triggers only on push/PR to `main`/`master`; all work happens on `claude/*` branches merged locally — which is exactly how C1 shipped. With C1 patched, coverage is **68.1% vs the 75% `--cov-fail-under`**, so the next master push fails regardless. *Fix:* trigger on `push: branches: ['**']`; raise coverage (`redistribution.py` is at 25%) or lower the gate to reality.
 
-*Fix:* Add `slowapi` middleware, limit `/auth/login` to ~5 req/min per IP, add account lockout after N consecutive failures.
+**H5. [Bug] Invalid `status_filter`/`category` query values return HTTP 500** — verified live (`GET /chores?status_filter=bogus` → 500). `chores.py:179-180` accept arbitrary strings compared against native PG enums. *Fix:* type the query params with the existing `Literal` aliases so FastAPI returns 422.
 
----
+**H6. [Bug/Test] Stale integration test breaks once login is fixed** — `tests/test_integration.py:283-285` still treats `GET /chores` as a bare list; since TASK-039 it's `{items, total, limit, offset}`. *Fix:* `instances = chores_resp.json()["items"]`.
 
-**SEC-005 — Container runs as root**  
-`backend/Dockerfile` has no `USER` directive. RCE in any dependency grants root inside the container.
+### Medium
 
-*Fix:* Add `RUN addgroup --system app && adduser --system --ingroup app app` + `USER app` before the `CMD`.
+**M1. [Bug] Second logout with the same token returns 409** — `auth.py:184-193` inserts the `jti` unconditionally; duplicate PK → `IntegrityError`, swallowed by the blanket handler at `main.py:95-98`. Should be idempotent. The blanket IntegrityError→409 handler also masks real bugs.
 
----
+**M2. [Operational] `revoked_tokens` and `refresh_tokens` grow forever** — both model docstrings promise a cleanup job that doesn't exist; every login inserts a refresh-token row with no per-user cap. *Fix:* purge expired rows in `run_daily_job`.
 
-**SEC-006 — No JWT revocation or logout mechanism**  
-7-day tokens have no revocation path. A stolen token is valid until expiry; there is no logout endpoint.
+**M3. [Bug/Operational] Scheduler silently skips a day if the app isn't running at 00:00 UTC** — `scheduler.py:220-243`: no `misfire_grace_time`, nothing runs at startup. A home server rebooted overnight generates nothing until the next midnight. *Fix:* run `run_daily_job()` once in lifespan startup (idempotent + advisory-locked) and/or set `misfire_grace_time`.
 
-*Fix:* Add a `jti` claim to every JWT, maintain a token blocklist (Redis), and add `POST /auth/logout`.
+**M4. [Operational] `docker-compose.yml` is a dev config presented as the only deployment path** — `--reload`, `DEBUG: "true"`, bind mount `./backend:/app` (hides the hardened image), no `env_file:` (so `REFRESH_TOKEN_TTL_DAYS`, `CORS_ALLOWED_ORIGINS`, `SCHEDULER_RUN_HOUR` can't be set without editing YAML), no migrations on startup. Old SEC-020/SEC-022 effectively unfixed. *Fix:* production compose file/profile — no mount, no reload, `DEBUG=false`, `env_file`, entrypoint running `alembic upgrade head` before uvicorn; use the GHCR image CI already builds.
 
----
+**M5. [Operational] No backup story** — the Postgres volume is the household's entire data; nothing dumps it. *Fix:* `pg_dump` sidecar or `make backup`/cron target + restore documentation.
 
-### Medium (summary)
+**M6. [Missing feature] No password change or reset** — a forgotten password is unrecoverable without psql. For self-host without SMTP: authenticated `POST /users/me/password` (verify old password, revoke all refresh tokens), plus a small CLI script for admin resets.
 
-| ID | Description | File |
-|---|---|---|
-| SEC-007 | Enum fields (`category`, `effort_level`, `chore_type`) are plain `str` — invalid values cause HTTP 500 instead of 422 | `app/schemas/chore.py:17–19` |
-| SEC-008 | Manual chore assignee not validated as household member — any user ID accepted | `app/api/chores.py:102–105` |
-| SEC-009 | OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) exposed with no access control in production | `main.py` |
-| SEC-010 | PostgreSQL port `5432` bound to all host interfaces in `docker-compose.yml` | `docker-compose.yml:9` |
-| SEC-011 | `display_name` lacks `max_length=100` — strings over 100 chars cause HTTP 500 | `app/api/users.py:15` |
-| SEC-012 | No security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security`) | `main.py` |
-| SEC-013 | Unlimited active invite tokens per household — no revocation or cap | `app/api/invites.py:29–54` |
-| SEC-014 | Password policy: no `max_length` (bcrypt silently truncates at 72 bytes, enabling same-prefix collision) and no complexity requirements | `app/schemas/auth.py:8–11` |
+**M7. [Missing feature] No account deletion, no household deletion** — FK cascades are already defined; implementation is mostly authorization + sole-admin/last-member semantics.
 
-### Low (summary)
+**M8. [Bug] Emails are case-sensitive** — `auth.py:32,58`: `Alex@…` and `alex@…` are distinct accounts. *Fix:* lowercase-normalize on register/login + data migration (or `citext`/functional unique index).
 
-| ID | Description |
-|---|---|
-| SEC-015 | Email enumeration via `POST /auth/register` returning 409 with "Email already registered" |
-| SEC-016 | Scheduler uses `date.today()` (local timezone) while APScheduler runs in UTC — wrong date near midnight |
-| SEC-017 | `rotation_pointer` exposed in household response schemas — leaks internal algorithm state |
-| SEC-018 | `passlib` unmaintained since 2022; `bcrypt<4.0.0` pin blocks security patches |
-| SEC-019 | No security audit logging (failed logins, role changes, member removal) |
-| SEC-020 | `--reload` flag active in `docker-compose.yml` production command |
-| SEC-021 | `RecurrenceRule.interval_n` has no upper bound (`ge=1` only) |
-| SEC-022 | Host volume mount exposes entire `backend/` directory including `.venv` and secrets |
-| SEC-023 | No CORS configuration — `allow_origins=["*"]` risk if added later without thought |
+**M9. [Bug] Leaderboard time-window issues** — `leaderboard.py:32-34` uses local `date.today()` (wrong boundaries on non-UTC hosts, inconsistent with the UTC scheduler); `:54,62` cap windows at `23:59:59`, excluding the final second. *Fix:* UTC dates + exclusive `< next_period_start` upper bound.
 
-### Positive Security Findings
+**M10. [Improvement] Refresh-token replay not treated as theft; inconsistent response shape** — replaying a rotated token → 401 only; standard hardening revokes all the user's refresh tokens on reuse. The endpoint also returns a bare dict while login returns `TokenResponse` — declare `response_model=TokenResponse`.
 
-These controls are implemented correctly and should be maintained:
-- All DB operations use SQLAlchemy ORM with parameterized queries — **no SQL injection risk**
-- Login returns identical error for unknown email and wrong password — **enumeration hardened**
-- Write endpoints on chores, members, and households correctly gate on `require_admin` or `require_household_member`
-- Sole-admin guard prevents household lockout on member removal and leave
-- Invite tokens use `secrets.token_urlsafe(16)` — 128 bits of entropy
-- Single-use invite tokens protected with `used_at` flag set atomically
-- `SELECT FOR UPDATE` in `complete_chore_instance` prevents double-completion race
-- UUID primary keys throughout — ID enumeration infeasible
-- bcrypt password hashing with salt — no plaintext storage
-- JWT `exp` claim set and verified; algorithm pinned to prevent algorithm-switching attacks
+**M11. [Improvement] Scheduler backfills unbounded past instances** — `scheduler.py:130-134` generates every due date from `first_due_date`; after downtime a daily chore floods the household with instantly-overdue instances, each advancing the rotation pointer. Also the per-instance `auto_assign` loop (`:140-142`) remains an N+1. *Fix:* start at `max(first_due_date, today - grace)`; reuse the bulk single-lock assignment pattern.
+
+**M12. [Improvement] No JWT_SECRET strength validation** — `config.py:11`. Add a `field_validator` requiring ≥32 chars and rejecting the `.env.example` placeholder.
+
+### Low
+
+**L1. [Bug] Rotation-pointer adjustment on member removal is wrong for pointers ≥ member count** — `redistribution.py:121-130` compares `removed_index` against the raw unbounded pointer (`assignment.py:55` stores `pointer+1` unmodded), so the decrement fires almost always. *Fix:* compare against `original_pointer % member_count`, or store the pointer modulo N.
+
+**L2. [Bug] Invite-accept race** — `invites.py:84-117` doesn't lock the invite row; two users can redeem one single-use token concurrently. Add `with_for_update()`.
+
+**L3. [Bug] Reassignment allows terminal instances** — `chores.py:376-449` reassigns `complete`/`cancelled` instances; add a status guard.
+
+**L4. [Debt] Dead code / no lint** — `_COMPLETABLE_STATUSES` unused (`chores.py:269`); dead `hasattr(value, "model_dump")` branch (`chores.py:487-489`); unused imports in several files. No ruff/mypy config, no lint step in CI.
+
+**L5. [Debt] Test suite speed** — `conftest.py:78-80` drops/recreates the entire schema per `async_client` test (~2m50s for 137 tests). Session-scoped schema + per-test transaction rollback would cut this dramatically.
+
+**L6. [Debt] Config/docs mismatches** — `.env.example:52` documents the test DB on port 5433 and references a nonexistent `docker-compose.test.yml`, while CI/Makefile use 5432.
+
+**L7. [Accepted] Register email enumeration (409)** — acceptable for an MVP once rate limiting (H1) exists.
+
+**L8. [Architecture] Business logic in route handlers** — `complete_chore_instance` (~90 lines) and `create_chore` (~95 lines) orchestrate inline. Extract a `ChoreService` before adding notifications/skip features.
+
+**L9. [Missing minor endpoints]** — no `GET` for a single chore definition or definition list; no "skip chore" action.
+
+**L10. [Roadmap] Notifications** — nothing notifies assignees of due/overdue chores. For self-host, ntfy.sh/Gotify/webhook push from `run_daily_job` fits better than FCM/APNS.
+
+### Repo-level (not backend code, found during this review)
+
+**R1. No root README / self-hosting guide** — only `flutter_app/README.md` exists. There is no documentation of how to deploy the stack, configure the app, or restore a backup. For a self-hosted-only project this is a top gap.
+**R2. Makefile hardcodes `podman compose` and a personal Flutter path** — fine for the owner's machine, worth a `COMPOSE ?=` variable.
 
 ---
 
-## 3. Code Quality
+## 3. Suggested Order of Work
 
-### Architecture
+1. **C1 + H6** — fix login and the stale test (trivial diffs, unblocks everything).
+2. **H4** — CI on all branches + coverage gate reality check.
+3. **H3, H5, M1** — small `chores.py`/logout correctness fixes.
+4. **H1, H2, M12** — rate limiting, short access tokens, secret validation.
+5. **M3, M2, M11** — scheduler resilience and token-table hygiene.
+6. **M4, M5, R1** — production compose + startup migrations, backups, README.
+7. **M6, M7, M8, M9, M10** — password change, deletions, email normalization, leaderboard windows.
+8. Low items opportunistically; **L10** notifications as the next feature milestone.
 
-The codebase demonstrates clear architectural intent: route handlers → service layer → ORM. The `AssignmentStrategy` Protocol with `RoundRobinStrategy` is well-designed. The `deps.py` dependency stack (`get_current_user` → `require_household_member` → `require_admin`) is composable and reusable.
-
-**Issues:**
-
-- `complete_chore_instance` (`chores.py:241–323`) contains ~80 lines of business logic (status transitions, point calculation, ledger creation) that belongs in a `ChoreService` — not in the route handler.
-- `create_chore` (`chores.py:71–148`) manually orchestrates definition creation, instance creation, and display-name resolution inline.
-- `redistribution.py:113` instantiates `AssignmentService(RoundRobinStrategy())` directly, bypassing the injection pattern used elsewhere.
-- Complex aggregation queries (leaderboard, household list) live inline in route handlers — no query/repository layer.
-
-### Type Safety Gaps
-
-All five of these accept arbitrary strings but should use `Literal` types:
-
-```python
-# app/schemas/chore.py — current (broken)
-category: str         # should be Literal["kitchen", "bathroom", ...]
-effort_level: str     # should be Literal["easy", "medium", "hard"]
-chore_type: str       # should be Literal["one_off", "recurring"]
-interval_unit: str    # should be Literal["days", "weeks", "months"]
-
-# app/schemas/chore.py — ChoreDefinitionResponse
-recurrence_rule: Optional[dict]  # should be Optional[RecurrenceRule]
-```
-
-Invalid values pass Pydantic validation, hit the PostgreSQL enum constraint, and return HTTP 500.
-
-### Dead Code and Inconsistencies
-
-- `chores.py:233`: `_COMPLETABLE_STATUSES` is defined but never referenced — the guard at line 278 uses `_TERMINAL_STATUSES`.
-- `test_chores.py:205`: `_recurring_payload` is defined but never called.
-- `security.py:4`: docstring says "Stubs — full implementation comes in a later task" — the module is fully implemented.
-- `Optional[str]` and `str | None` used inconsistently in the same file (`chores.py`); Python 3.12 project should use `X | None` uniformly.
-
-### Error Handling
-
-- `GET /households/{id}/chores` `status_filter` and `category` query parameters accept arbitrary strings with no validation — an invalid value silently returns an empty list instead of a 422.
-- Leaderboard `window_end` uses `time(23, 59, 59)` — timestamps between `23:59:59.000001` and `23:59:59.999999` on the period boundary are excluded.
-- `accept_invite` uses `scalar_one()` on the household lookup — if the household was hard-deleted after token creation, a 500 is returned instead of a 410.
-
-### Test Suite
-
-The test suite has good breadth (16 files covering all routers, services, scheduler, and integration flows) and correctly uses real PostgreSQL — not mocks.
-
-**Critical issue — confirmed key mismatch:** `test_integration.py:318` sends `{"unit": "weeks", "interval": 1}` but `RecurrenceRule` requires `interval_unit` and `interval_n`. In Pydantic v2 with default `extra="ignore"`, these unknown keys are dropped and the required fields are missing, causing a 422. The test asserts 201. The comment block at `test_integration.py:18–26` acknowledges "a key mismatch" but misattributes it to the scheduler's storage format.
-
-**DRY violations:** `_get_test_database_url()` is duplicated in 9 test files. The `async_client` fixture is duplicated in ~8 test files. A single `conftest.py` fixture would eliminate ~300 lines of duplication and prevent fixture drift.
-
-**Missing test cases:**
-- Reading chores as a non-member (the authorization bypass is untested)
-- Passing invalid `category`, `effort_level`, or `chore_type` values
-- PATCH on a chore definition from a different household
-- `flag_overdue_instances` on the exact `due_date == today` boundary
-
-### Performance (N+1 patterns)
-
-- `redistribution.py:104–117`: One `SELECT FOR UPDATE` per chore instance inside a loop — ten pending chores = ten lock acquisitions on the same `households` row.
-- `scheduler.py:118–123`: One `SELECT due_date WHERE definition_id = ?` per definition inside the scheduler loop — 100 definitions = 100 round-trips. Should be a single aggregated query.
-
-### Dependencies
-
-| Package | Issue |
-|---|---|
-| `passlib` | Last release 2022, effectively unmaintained |
-| `bcrypt<4.0.0` | Version cap blocks security fixes from bcrypt 4.x |
-| `python-jose` | Known CVEs, last release 2022; replace with `PyJWT` |
-| `pytest`, `httpx`, `pytest-cov` | In `[project]` dependencies — installed in production containers |
-
----
-
-## 4. Prioritized Action Plan
-
-### Immediate (security/correctness — do before any deployment)
-
-1. **Purge `.env` from git, rotate credentials** — `backend/.gitignore`, `docker-compose.yml`
-2. **Generate a strong `JWT_SECRET`** — `python -c "import secrets; print(secrets.token_hex(32))"`
-3. **Fix IDOR on chore read endpoints** — replace `Depends(get_current_user)` with `Depends(require_household_member)` at `app/api/chores.py:164` and `app/api/chores.py:203`
-4. **Fix recurrence rule key mismatch** — align `test_integration.py:318` to send `interval_unit`/`interval_n`, or add Pydantic field aliases to `RecurrenceRule`
-
-### Short-term (1–2 weeks)
-
-5. Add rate limiting via `slowapi` on `/auth/login` and `/auth/register`
-6. Add non-root `USER` to `backend/Dockerfile`
-7. Replace `str` with `Literal` types for `category`, `effort_level`, `chore_type`, `interval_unit` in `app/schemas/chore.py`
-8. Add `max_length=72` to password field in `app/schemas/auth.py`
-9. Add database probe to `/health` endpoint
-10. Disable `/docs` and `/openapi.json` in production (`DEBUG` flag in `Settings`)
-11. Remove PostgreSQL `ports: "5432:5432"` from `docker-compose.yml`
-12. Consolidate `_get_test_database_url()` and `async_client` fixture into `tests/conftest.py`
-13. Move test dependencies (`pytest`, `httpx`, `pytest-cov`) to `[project.optional-dependencies.test]`
-
-### Medium-term (1 month)
-
-14. Implement `POST /auth/logout` with JWT blocklist (add `jti` claim + Redis blocklist)
-15. Implement `POST /auth/refresh` with short-lived access token + long-lived refresh token
-16. Add chore reassignment endpoint (`PATCH /households/{id}/chores/{iid}` with `assignee_id`)
-17. Add pagination to `GET /households/{id}/chores` (`limit`/`offset` or cursor-based)
-18. Add invite management endpoints (`GET /invites`, `DELETE /invites/{token}`)
-19. Add security headers middleware (`X-Content-Type-Options`, `X-Frame-Options`, `HSTS`)
-20. Replace `passlib` + `python-jose` with `bcrypt>=4.0.0` and `PyJWT`
-21. Fix scheduler timezone: replace `date.today()` with `datetime.now(timezone.utc).date()` in `app/tasks/scheduler.py:37`
-22. Remove `rotation_pointer` from all response schemas
-23. Add PostgreSQL advisory lock in `run_daily_job` to handle multi-worker deployments
-24. Fix N+1 in `redistribution.py` and `scheduler.py`
-25. Add `max_length` constraints to `UpdateProfileRequest.display_name` and `HouseholdCreate.name`
-
-### Long-term (v2 features)
-
-26. Push notifications for chore assignments and overdue reminders (device token model + FCM/APNS)
-27. Structured logging with `structlog` — include `request_id`, `user_id`, `household_id` per request
-28. Prometheus metrics via `prometheus-fastapi-instrumentator`
-29. API versioning (`/api/v1/` prefix)
-30. Password reset flow (forgot-password email + time-limited reset token)
-31. Household deletion with cascading cleanup
-32. Extract `ChoreService` from route handlers to isolate business logic
-
----
-
-## 5. Recommended Dockerfile (Production)
-
-```dockerfile
-FROM python:3.12-slim AS builder
-WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN pip install uv
-COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-dev --no-editable
-
-FROM python:3.12-slim
-WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN addgroup --system app && adduser --system --ingroup app app
-COPY --from=builder /app/.venv /app/.venv
-COPY . .
-USER app
-
-EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
-
-CMD ["/app/.venv/bin/uvicorn", "main:app", \
-     "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
-```
-
----
-
-## 6. Key File Reference
-
-| File | Primary Issues |
-|---|---|
-| `backend/.env` | Committed credentials (SEC-001) |
-| `backend/.gitignore` | Missing `.env` exclusion (SEC-001) |
-| `docker-compose.yml` | Hardcoded secrets, exposed DB port, `--reload` flag (SEC-001, SEC-010, SEC-020) |
-| `app/api/chores.py:164,203` | IDOR — missing `require_household_member` (SEC-003) |
-| `app/api/chores.py:102–105` | Assignee not validated as household member (SEC-008) |
-| `app/schemas/chore.py:9–19` | Unvalidated enum strings (SEC-007, type safety) |
-| `app/schemas/auth.py:8–11` | Weak password policy (SEC-014) |
-| `app/api/users.py:15` | Missing `max_length` on display_name (SEC-011) |
-| `app/api/health.py` | Shallow health check — no DB probe |
-| `app/core/security.py` | No JWT revocation (SEC-006) |
-| `app/tasks/scheduler.py:37` | Wrong timezone `date.today()` (SEC-016), N+1 query |
-| `app/schemas/household.py:19–21` | `rotation_pointer` exposed (SEC-017) |
-| `Dockerfile` | Runs as root, no HEALTHCHECK (SEC-005) |
-| `pyproject.toml` | Test deps in wrong group; unmaintained deps |
-| `tests/conftest.py` | Fixture consolidation target (DRY violations across 9 test files) |
-| `tests/test_integration.py:318` | Confirmed broken recurrence rule key mismatch |
+Corresponding tasks: see `docs/tasks.md` TASK-068 onward (rate limiting remains tracked as TASK-031).

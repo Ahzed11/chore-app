@@ -15,10 +15,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-001 … TASK-027 | ✅ Done (initial MVP build-out) |
 | TASK-028 … TASK-030 | ✅ Done (credential purge, IDOR fix, recurrence keys) |
 | TASK-031 | ❌ **Open — never implemented.** No rate limiting exists in the codebase (no `slowapi`, no limiter middleware). Still required before internet exposure. |
-| TASK-032 … TASK-044 | ✅ Done (Dockerfile hardening, logout/revocation, enum validation, health probe, fixtures, headers/CORS, refresh endpoint, reassignment+pagination, invite mgmt, N+1, deps, scheduler UTC/lock) |
+| TASK-032 … TASK-044 | ✅ Done (Dockerfile hardening, logout/revocation, enum validation, health probe, fixtures, headers/CORS, refresh endpoint, reassignment+pagination, invite mgmt, N+1, deps, scheduler UTC/lock). ⚠️ **TASK-042 introduced a regression that breaks every login** — fix is TASK-068, do it first. |
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects — see TASK-054+ (notably: TASK-047's logout call is defeated by a caller bug; TASK-050 missed the refresh Dio; TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
-| TASK-054 … | ⏳ Open — new tasks from the 2026-07-15 re-review (`docs/frontend-report.md`, `docs/backend-report.md`) |
+| TASK-054 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
+| TASK-068 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`). **Start with TASK-068 (broken login), then TASK-069 (CI on all branches).** |
 
 ---
 
@@ -1799,5 +1800,316 @@ Small independent fixes, safe to do in one PR:
 **Acceptance criteria**:
 - [ ] Each numbered item verified individually; `flutter analyze` and `flutter test` green.
 - [ ] Chore description is visible somewhere in the UI.
+
+---
+
+## TASK-068: Backend — Fix Broken Login (500 on Every Request) and Stale Integration Test
+
+**Domain**: Backend  
+**Priority**: CRITICAL — login is completely non-functional on this branch  
+**Depends on**: none  
+**Source**: `docs/backend-report.md` C1, H6
+
+TASK-042 (commit `b231179`) removed the `expires_delta` parameter from `create_access_token` in `app/core/security.py:34`, but `app/api/auth.py:78-81` still passes `expires_delta=...`. Every `POST /auth/login` raises `TypeError` → HTTP 500. **68 of 137 tests currently fail** on this. `tests/test_auth_middleware.py:101` also calls the removed kwarg. Separately, `tests/test_integration.py:283-285` still treats `GET /chores` as a bare list even though TASK-039 changed it to a `{items, total, limit, offset}` envelope — that test fails once login is fixed.
+
+**Steps**:
+1. Restore `expires_delta: timedelta | None = None` on `create_access_token` in `app/core/security.py` (when None, fall back to `JWT_EXPIRY_DAYS` as today), OR remove the kwarg from both call sites (`app/api/auth.py:78-81`, `tests/test_auth_middleware.py:101`). Restoring the parameter is preferred — tests use it to mint short-lived tokens.
+2. Fix `tests/test_integration.py:283-285`: `instances = chores_resp.json()["items"]`.
+3. Run the full suite against PostgreSQL: expect 137/137 passing (coverage gate issues are handled separately in TASK-069).
+
+**Acceptance criteria**:
+- [ ] `POST /auth/login` returns 200 with a token pair.
+- [ ] Full test suite passes (ignore the coverage threshold for this task if needed via `--no-cov`).
+
+---
+
+## TASK-069: DevOps — Run CI on All Branches and Fix the Coverage Gate
+
+**Domain**: DevOps  
+**Priority**: High — the reason TASK-068's regression shipped  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H4
+
+`.github/workflows/ci.yml` and `.github/workflows/flutter.yml` trigger only on push/PR to `main`/`master`. All development happens on `claude/*` branches merged locally, so CI never ran on the branch that broke login. Additionally, actual backend coverage is **68.1%** against the `--cov-fail-under=75` gate in `backend/pyproject.toml`, so the next master push fails even with all tests green.
+
+**Steps**:
+1. In both workflows, change the `push` trigger to all branches (`branches: ['**']`) while keeping PR triggers; keep the GHCR image push job restricted to the default branch (it already checks `github.event_name == 'push'` — tighten to `github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'`).
+2. Address the coverage gap: add tests for the least-covered modules (`app/services/redistribution.py` is at ~25%; logout/refresh paths in `app/api/auth.py`) until >=75%, or lower the gate to the measured value and add a comment to ratchet it up.
+3. Add a backend lint step: add `ruff` to the `test` optional dependencies, a `[tool.ruff]` config (with SQLAlchemy-friendly ignores for string annotations), and a `uv run ruff check` step in CI. Fix or noqa existing findings (~9 real ones: unused imports, unused `_COMPLETABLE_STATUSES` in `chores.py:269`, dead `hasattr(value, "model_dump")` branch at `chores.py:487-489`).
+
+**Acceptance criteria**:
+- [ ] Pushing to any branch runs backend tests + lint and the Flutter analyze/test/build.
+- [ ] Image publishing still happens only from the default branch.
+- [ ] CI is green on this branch after TASK-068.
+
+---
+
+## TASK-070: Backend — Short-Lived Access Tokens and JWT Secret Validation
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H2, M12
+
+Access tokens live 7 days (`app/core/config.py:13`) even though rotated 30-day refresh tokens exist and the Flutter app implements the refresh flow — a stolen access token stays valid for a week, and the `revoked_tokens` blocklist only helps on explicit logout. Also, `JWT_SECRET` accepts any string, including the `.env.example` placeholder.
+
+**Steps**:
+1. Add `JWT_EXPIRY_MINUTES: int = 30` to `Settings`; use it in `create_access_token` and in login/refresh `expires_in` responses. Keep `JWT_EXPIRY_DAYS` temporarily as a deprecated fallback (if explicitly set, honor it and log a warning) so existing `.env` files don't break.
+2. Update `.env.example` (both root and backend) accordingly.
+3. Add a `field_validator` on `JWT_SECRET` in `Settings`: require >=32 characters and reject known placeholders (`change-me…`, `replace_with…`). Fail fast at startup with a clear message.
+4. Update tests that assume 7-day expiry; add a test for the validator (placeholder secret → startup error).
+
+**Acceptance criteria**:
+- [ ] New tokens expire in minutes, not days; `expires_in` reflects it.
+- [ ] The Flutter refresh flow keeps sessions alive across expiry (manual or integration check).
+- [ ] Startup fails with a clear error on a short or placeholder `JWT_SECRET`.
+
+---
+
+## TASK-071: Backend — chores.py Correctness Fixes (Pagination Order, Query Param 422, Reassignment Guard)
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H3, H5, L3
+
+Three small correctness bugs in `app/api/chores.py`:
+1. The paginated list query (`chores.py:210-217`) has no ORDER BY — PostgreSQL gives no ordering guarantee with LIMIT/OFFSET, so pages can repeat or skip rows.
+2. `status_filter` and `category` query params (`chores.py:179-180`) are plain `str`; invalid values reach the native PG enum comparison and return HTTP 500 (verified live).
+3. `PATCH /chores/{iid}/assignee` (`chores.py:372-449`) happily reassigns `complete`/`cancelled` instances.
+
+**Steps**:
+1. Add `.order_by(ChoreInstance.due_date, ChoreInstance.id)` to both the count-consistent data query and any related listing.
+2. Type the query params with the existing `Literal` aliases from `app/schemas/chore.py` (status also needs `overdue`/`cancelled` values — reuse the instance-status type) so FastAPI returns 422.
+3. In the reassignment endpoint, return 409 when the instance status is `complete` or `cancelled`.
+4. Tests: page stability (create 3 instances, fetch limit=2/offset=0 and offset=2, assert no overlap), `?status_filter=bogus` → 422, reassigning a completed instance → 409.
+
+**Acceptance criteria**:
+- [ ] Pagination is deterministic (ordered by due date, then id).
+- [ ] Invalid filter values return 422, not 500.
+- [ ] Terminal instances cannot be reassigned.
+
+---
+
+## TASK-072: Backend — Auth Token Hygiene: Idempotent Logout, Table Cleanup, Replay Hardening
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M1, M2, M10
+
+Three related issues:
+1. Logging out twice with the same token returns 409: `auth.py:184-193` inserts the `jti` into `revoked_tokens` unconditionally; the duplicate-PK `IntegrityError` is swallowed by the blanket handler in `main.py:95-98`.
+2. `revoked_tokens` and `refresh_tokens` grow forever — the cleanup job promised in both model docstrings doesn't exist, and every login adds a refresh-token row with no per-user cap.
+3. Refresh-token replay (reuse of a rotated/revoked token) returns 401 but isn't treated as theft; and `/auth/refresh` returns an untyped bare dict without `expires_in` while login returns `TokenResponse`.
+
+**Steps**:
+1. Make logout idempotent: check for the `jti` first or use `INSERT ... ON CONFLICT DO NOTHING`; return 200 either way.
+2. In `run_daily_job` (`app/tasks/scheduler.py`), delete rows from `revoked_tokens` and `refresh_tokens` whose `expires_at` is in the past.
+3. On refresh with a token that exists but is already revoked/rotated, revoke **all** refresh tokens for that user (standard reuse-detection) and return 401.
+4. Declare `response_model=TokenResponse` on `/auth/refresh` and include `expires_in`.
+5. Consider scoping down the blanket IntegrityError→409 handler (log the constraint name; it currently masks real bugs).
+6. Tests: double logout → 200/200; cleanup removes only expired rows; replay revokes the family; refresh response shape matches login.
+
+**Acceptance criteria**:
+- [ ] Double logout is idempotent.
+- [ ] Expired token rows are purged daily.
+- [ ] Rotated-token replay revokes all of the user's refresh tokens.
+
+---
+
+## TASK-073: Backend — Scheduler Resilience: Run on Startup, Misfire Grace, Backfill Cap, Bulk Assignment
+
+**Domain**: Backend  
+**Priority**: Medium — directly affects self-hosted reliability  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M3, M11
+
+Two self-hosting-relevant scheduler problems (`app/tasks/scheduler.py`):
+1. If the server isn't running at 00:00 UTC (reboot, power cut — common for home servers), the daily job silently skips: no instances generated, nothing flagged overdue, until the next midnight. There is no `misfire_grace_time` and nothing runs at startup.
+2. Instance generation starts from `first_due_date` unbounded (`scheduler.py:130-134`): after extended downtime or a definition created with an old date, a daily chore floods the household with dozens of instantly-overdue instances, each advancing the rotation pointer. Assignment also remains an N+1 (`scheduler.py:140-142` — one `SELECT FOR UPDATE` per new instance).
+
+**Steps**:
+1. In the app lifespan startup, invoke `run_daily_job()` once (it is idempotent and advisory-locked, so multi-worker startup is safe). Also set `misfire_grace_time` (e.g. 6 hours) on the cron trigger.
+2. Cap backfill: start generation at `max(first_due_date, today - GRACE_DAYS)` with `GRACE_DAYS` configurable (default e.g. 3), or track a `last_generated_until` date column on `ChoreDefinition` (requires a migration) — the cap approach is simpler and adequate.
+3. Batch-assign new instances using the single-lock pattern from `AssignmentService.redistribute_chores_bulk` instead of per-instance `auto_assign`.
+4. Tests: startup runs the job once; a definition with `first_due_date` 30 days ago generates only capped instances; assignment acquires the household lock once per household per run.
+
+**Acceptance criteria**:
+- [ ] Restarting the app after missed midnights immediately generates/flags correctly.
+- [ ] No overdue-instance flood after downtime.
+- [ ] One rotation-lock acquisition per household per scheduler run.
+
+---
+
+## TASK-074: DevOps — Production Docker Compose with Startup Migrations
+
+**Domain**: DevOps  
+**Priority**: High for self-hosting  
+**Depends on**: none  
+**Source**: `docs/backend-report.md` M4; old SEC-020/SEC-022
+
+The repo's only `docker-compose.yml` is a dev config: `--reload`, `DEBUG: "true"`, and a bind mount `./backend:/app` that hides the hardened image contents. There is no `env_file:` (so `REFRESH_TOKEN_TTL_DAYS`, `CORS_ALLOWED_ORIGINS`, `SCHEDULER_RUN_HOUR`, `INVITE_TOKEN_TTL_HOURS` can't be set without editing YAML), and migrations must be run manually via `make migrate`. Meanwhile CI already publishes an image to GHCR that nothing references.
+
+**Steps**:
+1. Add `docker-compose.prod.yml` (or a `prod` profile): `api` uses `image: ghcr.io/<owner>/chore-app-api:latest` (documented override for a pinned tag), no source mount, no `--reload`, `DEBUG=false`, `env_file: .env`, `restart: unless-stopped`; `db` unchanged but without the host port mapping (or keep `127.0.0.1:` binding).
+2. Add an entrypoint script to the backend image that runs `alembic upgrade head` before starting uvicorn (single-instance self-host makes this safe). Keep the raw uvicorn CMD usable for dev.
+3. Wire the remaining Settings env vars into the compose environment via `env_file` and document them in the root `.env.example`.
+4. Add `make prod-up` / `make prod-down` targets (and make `podman compose` configurable: `COMPOSE ?= podman compose`).
+5. Verify: `docker compose -f docker-compose.prod.yml up` on a clean machine reaches a healthy API with migrated schema using only `.env`.
+
+**Acceptance criteria**:
+- [ ] Production compose runs the published image with no source mount, no reload, docs disabled.
+- [ ] Fresh deployment migrates automatically and serves `/health` → 200.
+- [ ] All Settings-known env vars are settable via `.env` without YAML edits.
+
+---
+
+## TASK-075: DevOps — Database Backup and Restore
+
+**Domain**: DevOps  
+**Priority**: High for self-hosting  
+**Depends on**: TASK-074  
+**Source**: `docs/backend-report.md` M5
+
+The Postgres volume holds the household's entire data and nothing backs it up. For a self-hosted family app, data loss is the worst realistic failure.
+
+**Steps**:
+1. Add a backup service to the production compose (e.g. `prodrigestivill/postgres-backup-local`) with a daily schedule, 7 daily / 4 weekly retention, writing to a host-mounted `./backups` directory. Alternatively (or additionally) add `make backup` / `make restore FILE=...` targets wrapping `pg_dump -Fc` / `pg_restore`.
+2. Document restore steps in the README (TASK-076): stop api → restore dump → start api.
+3. Test the full cycle: create data, back up, wipe the volume, restore, verify data intact.
+
+**Acceptance criteria**:
+- [ ] Automatic daily dumps land in a host directory with retention.
+- [ ] A documented, tested restore procedure exists.
+
+---
+
+## TASK-076: Docs — Root README and Self-Hosting Guide
+
+**Domain**: Docs  
+**Priority**: High for self-hosting  
+**Depends on**: TASK-074 (references the prod compose), TASK-075 (restore docs)  
+**Source**: `docs/backend-report.md` R1
+
+The repository has no root README — only `flutter_app/README.md` (the Flutter template). A self-hosted-only project needs deployment documentation.
+
+**Steps**:
+1. Write `README.md` at the repo root covering: what the app is (screenshots optional), architecture overview (FastAPI + PostgreSQL + Flutter Android app), quick start for production (clone → copy `.env.example` → generate `JWT_SECRET` → `docker compose -f docker-compose.prod.yml up -d`), how to get the APK (CI artifact) and point it at your server (references the server-URL screen from TASK-057), HTTPS guidance (reverse proxy example with Caddy or nginx — note uvicorn's `--proxy-headers` and the need for `--forwarded-allow-ips` when proxied from another container), backup/restore (from TASK-075), development setup (`make dev`, running tests), and a pointer to `docs/` for requirements/reports/tasks.
+2. Fix `backend/.env.example:52`: the test DB note references a nonexistent `docker-compose.test.yml` and port 5433 while CI/Makefile use 5432 — align the docs with reality.
+
+**Acceptance criteria**:
+- [ ] A newcomer can deploy the stack and connect the app following only the README.
+- [ ] No references to files or ports that don't exist.
+
+---
+
+## TASK-077: Backend — Password Change and Admin Reset
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M6
+
+A forgotten password is currently unrecoverable without raw psql. Email-based reset is overkill for self-host (no SMTP assumption); provide the two flows that work without email.
+
+**Steps**:
+1. Add `POST /users/me/password` with body `{ "current_password": str, "new_password": str }` (new password: same min/max constraints as registration). Verify the current password; on success, update the hash and **revoke all of the user's refresh tokens** (and optionally all outstanding JWTs via a `password_changed_at` claim check — refresh revocation alone is acceptable given TASK-070's short access tokens).
+2. Add a management CLI (e.g. `python -m app.cli reset-password <email>`) that prompts for a new password and updates the hash directly — documented in the README as the "forgot password" recovery path for self-hosters.
+3. Tests: wrong current password → 403; success → old refresh token rejected; CLI updates the hash.
+
+**Acceptance criteria**:
+- [ ] Users can change their password in-app (Flutter UI can follow later).
+- [ ] The server operator can reset any account's password from the host.
+- [ ] Password change invalidates existing refresh tokens.
+
+---
+
+## TASK-078: Backend — Account Deletion and Household Deletion
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M7
+
+Neither `DELETE /users/me` nor `DELETE /households/{id}` exists. FK cascade rules are already defined on the models, so the work is mostly authorization and edge-case semantics.
+
+**Steps**:
+1. `DELETE /households/{household_id}` — admin only; require a confirmation body or `?confirm=<household name>`; hard-delete the household (cascades to memberships, invites, chores, ledger). Return 204.
+2. `DELETE /users/me` — require the current password in the body. Rules: if the user is the sole admin of a household with other active members → 409 directing them to promote someone first; sole member households are deleted outright; otherwise the membership is deactivated and pending chores redistributed (reuse the removal/redistribution service). Then delete the user row (PointLedger rows: decide keep-with-SET NULL vs cascade — check the existing FK and keep history if `SET NULL` is already configured).
+3. Revoke all tokens for the deleted user.
+4. Tests: cascade coverage, sole-admin guard, redistribution on self-delete, token invalidation.
+
+**Acceptance criteria**:
+- [ ] A household can be deleted by its admin with explicit confirmation.
+- [ ] A user can delete their account; remaining households stay consistent.
+- [ ] No orphaned rows violate FK constraints after either operation.
+
+---
+
+## TASK-079: Backend — Email Case Normalization and Leaderboard Window Fixes
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M8, M9
+
+Two small correctness items:
+1. Emails are case-sensitive (`auth.py:32,58`): `Alex@gmail.com` and `alex@gmail.com` register as distinct accounts, and login must match registration case exactly.
+2. Leaderboard windows: `leaderboard.py:32-34` uses local `date.today()` (inconsistent with the UTC scheduler; wrong week/month boundaries on non-UTC hosts) and `:54,62` cap the window at `23:59:59`, excluding points awarded in the final second of the period.
+
+**Steps**:
+1. Normalize emails to lowercase on register and login. Add an Alembic migration lowercasing existing rows; guard against collisions (if two accounts differ only by case, fail the migration with a clear message — operator resolves manually). Optionally add a functional unique index on `lower(email)`.
+2. In the leaderboard, compute "today" as `datetime.now(timezone.utc).date()` and make window upper bounds exclusive (`awarded_at < next_period_start`) instead of `<= 23:59:59`.
+3. Tests: mixed-case login succeeds; duplicate-case registration → 409; a ledger entry at `23:59:59.5` on the period's last day counts.
+
+**Acceptance criteria**:
+- [ ] Email uniqueness and login are case-insensitive.
+- [ ] Weekly/monthly windows are UTC-correct and include the entire final second.
+
+---
+
+## TASK-080: Backend — Low-Priority Fix Batch
+
+**Domain**: Backend  
+**Priority**: Low  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` L1, L2, L4, L5, L8, L9
+
+Small independent fixes, one PR:
+1. **Rotation-pointer adjustment bug** (L1): `redistribution.py:121-130` compares `removed_index` (0..N-1) against the raw unbounded pointer (`assignment.py:55` stores `pointer+1` unmodded), so the decrement fires almost always. Compare against `original_pointer % member_count` (count including the removed member), or store the pointer modulo N. Add regression tests for removal before/at/after the pointer with a pointer > N.
+2. **Invite-accept race** (L2): add `with_for_update()` to the invite-token select in `invites.py:84-117` so a single-use token can't be redeemed twice concurrently.
+3. **Dead code** (L4): remove `_COMPLETABLE_STATUSES` (`chores.py:269`), the dead `hasattr(value, "model_dump")` branch (`chores.py:487-489`), and unused imports (`app/services/assignment.py:3`, `app/db/base.py:1`, test files). (Covered by the lint step if TASK-069 lands first.)
+4. **Test suite speed** (L5): replace the per-test schema drop/create in `conftest.py:78-80` with a session-scoped schema + per-test truncation or transaction rollback. Target: full suite < 1 minute.
+5. **Architecture** (L8, optional if time permits): extract `complete_chore_instance` and `create_chore` orchestration into a `ChoreService` in `app/services/` — do this before implementing notifications.
+6. **Minor endpoints** (L9, optional): `GET /households/{id}/chores/definitions` (list) and `GET .../definitions/{definition_id}` for edit UIs.
+
+**Acceptance criteria**:
+- [ ] Rotation regression tests pass; concurrent invite acceptance yields exactly one member.
+- [ ] Test suite runtime is measurably reduced.
+- [ ] No behavior changes except the fixed bugs.
+
+---
+
+## TASK-081: Backend — Chore Reminder Notifications via ntfy/Gotify Webhook
+
+**Domain**: Backend  
+**Priority**: Low (next feature milestone)  
+**Depends on**: TASK-073  
+**Source**: `docs/backend-report.md` L10
+
+Nothing notifies assignees of due or overdue chores — `flag_overdue_instances` changes a status nobody sees until they open the app. For a self-hosted stack, push via a self-hostable notification service (ntfy or Gotify) or a generic webhook is a much better fit than FCM/APNS (no Google dependency, works with the existing infra).
+
+**Steps**:
+1. Add optional settings: `NOTIFY_URL` (e.g. an ntfy topic URL or Gotify endpoint), `NOTIFY_TOKEN` (optional auth header). Feature is disabled when unset.
+2. In `run_daily_job`, after generation/flagging, send one summary notification per household (or per user if per-user topics are configured — keep MVP simple: one topic): chores due today and newly overdue chores, with assignee display names.
+3. Use `httpx` with a short timeout; failures are logged, never fail the job.
+4. Document setup in the README (run ntfy alongside via compose, subscribe from the phone app).
+5. Tests: notification payload construction; disabled when unset; delivery failure doesn't break the job.
+
+**Acceptance criteria**:
+- [ ] With `NOTIFY_URL` set, the daily job posts a summary of due/overdue chores.
+- [ ] Unset config = no behavior change.
+- [ ] Notification failure never aborts instance generation.
 
 ---
