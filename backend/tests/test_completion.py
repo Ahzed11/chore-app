@@ -2,7 +2,6 @@
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import date, datetime, timezone
-from typing import Any
 
 import pytest
 import pytest_asyncio

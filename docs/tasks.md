@@ -8,6 +8,23 @@ Each task is designed to be self-contained. A developer agent can implement it b
 
 ---
 
+## Status Ledger (updated 2026-07-15)
+
+| Range | Status |
+|---|---|
+| TASK-001 … TASK-027 | ✅ Done (initial MVP build-out) |
+| TASK-028 … TASK-030 | ✅ Done (credential purge, IDOR fix, recurrence keys) |
+| TASK-031 | ❌ **Open — never implemented.** No rate limiting exists in the codebase (no `slowapi`, no limiter middleware). Still required before internet exposure. |
+| TASK-032 … TASK-044 | ✅ Done (Dockerfile hardening, logout/revocation, enum validation, health probe, fixtures, headers/CORS, refresh endpoint, reassignment+pagination, invite mgmt, N+1, deps, scheduler UTC/lock). ⚠️ **TASK-042 introduced a regression that breaks every login** — fix is TASK-068, do it first. |
+| TASK-045 … TASK-051 | ✅ Done, with follow-up defects — see TASK-054+ (notably: TASK-047's logout call is defeated by a caller bug; TASK-050 missed the refresh Dio; TASK-051 only fixed the banner) |
+| TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
+| TASK-054, TASK-055 | ✅ Done 2026-07-15 — INTERNET permission + cleartext network-security-config in the main manifest; logout ordering fixed so `POST /auth/logout` actually fires. ⚠️ TASK-055's ordering regression test is deferred to TASK-056, which introduces the Dio mock infrastructure. |
+| TASK-056 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
+| TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed. Coverage gate stays at 75%: the "68%" measured earlier was a coverage.py artifact fixed by `[tool.coverage.run] concurrency = ["greenlet", "thread"]` (merged from main/PR #2) — real coverage is **95%**. 137/137 tests pass, lint clean. |
+| TASK-070 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
+
+---
+
 ## TASK-001: Backend — Project Scaffolding
 
 **Domain**: Backend  
@@ -1470,3 +1487,631 @@ TASK-016 (Flutter Scaffold)
 
 TASK-001 └─ TASK-027 (Docker Compose)
 ```
+
+## TASK-054: Flutter — Fix Release Android Config: INTERNET Permission and Cleartext Traffic
+
+**Domain**: Flutter  
+**Priority**: CRITICAL — release APK is non-functional without this  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-3
+
+Only `android/app/src/debug/AndroidManifest.xml` and `src/profile/AndroidManifest.xml` declare `android.permission.INTERNET`. The main manifest (`android/app/src/main/AndroidManifest.xml`) does not, so the release APK built by CI (`.github/workflows/flutter.yml`) cannot make any network request. Additionally, the default `API_BASE_URL` is plain `http://`, and Android 9+ blocks cleartext HTTP by default, so even with the permission a self-hosted LAN server over HTTP is unreachable.
+
+**Steps**:
+1. Add `<uses-permission android:name="android.permission.INTERNET"/>` to `android/app/src/main/AndroidManifest.xml`.
+2. Add a network security config (`android/app/src/main/res/xml/network_security_config.xml`) that permits cleartext traffic (self-hosted users commonly run plain HTTP on a LAN), and reference it via `android:networkSecurityConfig` on the `<application>` element. Document in a comment that HTTPS via reverse proxy is the recommended setup.
+3. Verify the debug/profile manifests do not need changes (they already declare the permission).
+
+**Acceptance criteria**:
+- [ ] `flutter build apk --release` produces an APK whose merged manifest contains the INTERNET permission (verify with `aapt dump permissions` or by checking the merged manifest in `build/`).
+- [ ] The release app can call an `http://` server on Android 9+.
+
+---
+
+## TASK-055: Flutter — Fix Logout Ordering Bug (Server-Side Revocation Never Happens)
+
+**Domain**: Flutter  
+**Priority**: CRITICAL — one-line fix  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-2
+
+`household_dashboard_screen.dart:78-81` calls `AuthStorage.clearToken()` **before** `ref.read(authNotifierProvider.notifier).logout()`. `logout()` reads the stored token to send `POST /auth/logout`; since the token is already cleared, it reads null and skips the server call. The backend blocklist is never populated — TASK-047 is silently defeated.
+
+**Steps**:
+1. In `_logout` in `household_dashboard_screen.dart`, remove the `await AuthStorage.clearToken();` line. `AuthNotifier.logout()` already clears both tokens after calling the server.
+2. Add a widget/unit test asserting that tapping logout results in a `POST /auth/logout` request (mock Dio adapter) before local tokens are cleared.
+
+**Acceptance criteria**:
+- [ ] After logout, the old access token is rejected by the backend (401 from `GET /users/me`).
+- [ ] A test covers the logout → server-call ordering.
+
+---
+
+## TASK-056: Flutter — Harden the Token Refresh Interceptor
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: TASK-046  
+**Source**: `docs/frontend-report.md` F-1, F-4, F-5, F-20
+
+The refresh interceptor in `lib/core/api/api_client.dart:37-63` has three defects:
+1. **Infinite retry loop**: `isRefreshing` is reset before `dio.fetch(opts)` retries the original request. If the retry 401s again, the cycle repeats forever (backend rotates refresh tokens, so each refresh succeeds). No per-request retry marker exists. The interceptor also runs for 401s from `/auth/login` and `/auth/register`.
+2. **Concurrent 401s dropped**: when several requests 401 at once, only the first is retried; the rest surface as user-visible errors even though the refresh succeeded.
+3. **Network failure logs the user out**: `AuthNotifier.refresh()` (`auth_state.dart:141-144`) catches all errors and calls `clearOnUnauthorized()`, so a timeout or server reboot wipes tokens. The refresh Dio (`auth_state.dart:130`) also has no connect/receive timeouts.
+
+**Steps**:
+1. Mark retried requests: set `error.requestOptions.extra['retried'] = true` before re-dispatch; skip the refresh branch when the flag is present or when `requestOptions.path` starts with `/auth/`.
+2. Replace the `isRefreshing` bool with a shared `Completer<bool>` (or `Future<bool>?`): the first 401 starts the refresh, subsequent 401s await the same future, then all retry with the new token on success.
+3. In `AuthNotifier.refresh()`: only call `clearOnUnauthorized()` when the refresh endpoint returns 401/403; on `DioException` of network type (timeout, connection error), return `false` without clearing tokens so the caller can surface a transient error.
+4. Add connect/receive timeouts to the refresh Dio, matching `api_client.dart`.
+5. Use `ApiEndpoints.authRefresh()` / `ApiEndpoints.authLogout()` in `auth_state.dart:104,132` instead of hardcoded strings (finishes TASK-049).
+6. Add unit tests with a mock Dio adapter covering: 401 → refresh → retry succeeds; retry 401s again → no loop, user logged out; three concurrent 401s → one refresh, three retries; refresh timeout → tokens NOT cleared; 401 from `/auth/login` → no refresh attempt.
+
+**Acceptance criteria**:
+- [ ] No infinite loop when the server persistently 401s after refresh.
+- [ ] Concurrent 401s all succeed transparently after a single refresh.
+- [ ] Transient network failure during refresh does not log the user out.
+- [ ] Wrong-password login does not trigger a refresh attempt.
+- [ ] All new interceptor tests pass.
+
+---
+
+## TASK-057: Flutter — Runtime Server URL Configuration
+
+**Domain**: Flutter  
+**Priority**: High — headline feature for self-hosting  
+**Depends on**: TASK-054  
+**Source**: `docs/frontend-report.md` F-7
+
+`lib/core/config/app_config.dart:4-7` reads `API_BASE_URL` at compile time (`String.fromEnvironment`), defaulting to the Android emulator's `http://10.0.2.2:8000`. A user installing the CI-built APK has no way to point the app at their own server — every household would need a custom build.
+
+**Steps**:
+1. Create a `ServerConfig` storage (e.g. `shared_preferences` or reuse `flutter_secure_storage`) holding the base URL; fall back to the compile-time value when unset.
+2. Add a "Server" setup screen shown on first run when no URL is stored (before login), with a text field, and a "Test connection" action that calls `GET /health` (`ApiEndpoints.health` already exists, currently unused) and shows success/failure.
+3. Make `dioProvider` (and the auxiliary Dio instances in `auth_state.dart`) derive `baseUrl` from a `serverUrlProvider` so changing the URL takes effect without an app restart.
+4. Add an entry point to change the server URL later (e.g. from the login screen's overflow menu or a settings row on the dashboard). Changing it should log the user out (tokens are server-specific).
+5. Validate input: require scheme, strip trailing slash.
+6. Widget tests: first-run shows the setup screen; valid health check proceeds to login; invalid URL shows an error.
+
+**Acceptance criteria**:
+- [ ] Fresh install prompts for a server URL before login.
+- [ ] URL persists across restarts and is used by all API calls including refresh/logout.
+- [ ] Connection test gives clear success/failure feedback.
+- [ ] The URL can be changed later without reinstalling.
+
+---
+
+## TASK-058: Flutter — Fetch All Chore Pages (List Truncated at 50)
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: TASK-045  
+**Source**: `docs/frontend-report.md` F-6
+
+`_fetchChores` (`lib/features/chores/providers/chores_provider.dart:84-93`) sends no `limit`/`offset` and ignores the `total` field; the backend defaults to `limit=50` (`backend/app/api/chores.py:182`). Households with recurring chores exceed 50 instances quickly: older items silently vanish from the list, the "Done" tab is incomplete, and the client-side weekly-points sum (`my_chores_screen.dart:111-115`) is quietly wrong.
+
+**Steps**:
+1. In `_fetchChores`, loop: request with `limit=100` and increasing `offset`, accumulating `items`, until the accumulated count reaches `total`. Guard with a sane max (e.g. 10 pages) to avoid pathological loops.
+2. Keep the return type `List<ChoreModel>` so screens are unaffected.
+3. Unit-test the pagination loop with a mocked Dio returning two pages.
+
+**Acceptance criteria**:
+- [ ] A household with >50 chore instances shows all of them.
+- [ ] Exactly ⌈total/100⌉ requests are made.
+- [ ] Existing widget tests remain green.
+
+---
+
+## TASK-059: Flutter — Invalidate Related Providers After Mutations
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-11
+
+Several mutations leave sibling providers stale:
+- `completeChore` (`chores_provider.dart:101-147`) never invalidates `leaderboardProvider` / `weeklyLeaderboardProvider` — the rank pill on My Chores and the Leaderboard tab show pre-completion data.
+- `removeMember` / `changeRole` don't invalidate `choresNotifierProvider` — assignee names go stale after redistribution.
+- `leaveHousehold` / `joinByToken` don't invalidate the members/chores families.
+- The My Chores `RefreshIndicator` (`my_chores_screen.dart:156-159`) refreshes only the chores provider, not the weekly leaderboard.
+
+**Steps**:
+1. After a successful `completeChore`, call `ref.invalidate(leaderboardProvider(householdId))` and `ref.invalidate(weeklyLeaderboardProvider(householdId))` (match the actual provider family arguments).
+2. After `removeMember`/`changeRole`, invalidate the chores family for that household.
+3. After `leaveHousehold`/`joinByToken`, invalidate members and chores families.
+4. Include the weekly leaderboard in the My Chores pull-to-refresh.
+5. Add provider-level tests asserting invalidation (listen to the providers with a `ProviderContainer` and assert refetch).
+
+**Acceptance criteria**:
+- [ ] Completing a chore updates the rank pill and leaderboard without a manual refresh.
+- [ ] Removing a member refreshes chore assignee names.
+- [ ] Tests cover at least the completeChore → leaderboard invalidation path.
+
+---
+
+## TASK-060: Flutter — Wire Up Chore Editing (Currently Unreachable)
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-8
+
+`CreateChoreScreen` fully supports edit mode via `ChoreFormInitData`, but nothing in the app ever constructs it: no navigation passes it as `extra`, and the admin long-press menu on a chore card (`chore_card.dart:215-252`) only offers "Delete series". Chore editing effectively does not exist. Additionally the due-date validator (`create_chore_screen.dart:455-464`) rejects past dates even in edit mode, so a chore whose date already passed could not be saved unchanged.
+
+**Steps**:
+1. Add an "Edit series" item to `_showAdminMenu` in `chore_card.dart`, constructing `ChoreFormInitData` from the chore's definition fields and navigating to the create/edit route with it as `extra`.
+2. In edit mode, skip (or relax) the "due date must not be in the past" validation when the date is unchanged.
+3. On successful save, refresh the chores list (existing behavior for create should already do this — verify for edit).
+4. Widget tests: admin menu shows "Edit series"; screen opens pre-populated; saving calls `PATCH /households/{id}/chores/{definitionId}`.
+
+**Acceptance criteria**:
+- [ ] An admin can edit an existing chore definition end-to-end.
+- [ ] Members do not see the edit action.
+- [ ] Editing a chore with a past due date does not trap the user in validation errors.
+
+---
+
+## TASK-061: Flutter — Invite Deep Links
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: TASK-057  
+**Source**: `docs/frontend-report.md` F-10
+
+Invite QR codes and share links encode the backend `invite_url` (`{APP_BASE_URL}/join/{token}`), but the app registers no intent-filter and no matching route — scanning the QR opens a browser pointed at the API server. Joining currently requires manually copy-pasting the token into the dashboard dialog.
+
+**Steps**:
+1. Add a GoRouter route `/join/:token` that calls the existing `joinByToken` flow and navigates to the household on success.
+2. Register an Android intent-filter (App Links or a custom scheme such as `choreapp://join/{token}` — if using a custom scheme, change what the QR encodes accordingly; the URL scheme choice should be documented in the task PR).
+3. Handle the logged-out case: stash the pending token, complete login/registration, then join and clear the stash.
+4. Widget tests for the route: logged-in user joining; logged-out user redirected to login then joined.
+
+**Acceptance criteria**:
+- [ ] Scanning an invite QR on a device with the app installed opens the app and joins the household (after login if needed).
+- [ ] Invalid/expired tokens show the existing error handling.
+
+---
+
+## TASK-062: Flutter — Friendly API Error Messages
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-12, F-13
+
+`AppErrorWidget` (`shared/widgets/error_widget.dart:38`) and ~10 call sites render `error.toString()`, which for a `DioException` dumps the full request URL and Dio boilerplate at the user. `_extractMessage` (`auth_provider.dart:112`) is a partial solution but is auth-only and renders FastAPI 422 validation lists as raw JSON. Separately, the household rename flow (`household_management_screen.dart:230-238`) has no error handling at all — failures leave the edit UI open with no feedback.
+
+**Steps**:
+1. Create a shared `String friendlyErrorMessage(Object error)` helper in `lib/core/api/` that maps: connection/timeout errors → "Can't reach the server"; 401/403 → permission message; 409/410/422 → extract `detail` from the response body, flattening FastAPI validation error lists into readable text; anything else → generic message.
+2. Use it in `AppErrorWidget` (accept the raw error, not a pre-stringified message) and in all snackbar `catch` blocks.
+3. Wrap `updateHouseholdName` in try/catch in the management screen; show a snackbar on failure and keep the previous name.
+4. Unit tests for the mapper covering each branch, including a FastAPI 422 body.
+
+**Acceptance criteria**:
+- [ ] No screen ever displays a raw `DioException` string.
+- [ ] FastAPI `detail` messages (e.g. "You are not assigned to this chore") pass through verbatim.
+- [ ] Failed household rename shows feedback and does not corrupt UI state.
+
+---
+
+## TASK-063: Flutter — Real Release Signing, Application ID, and Versioning
+
+**Domain**: Flutter / DevOps  
+**Priority**: Medium  
+**Depends on**: TASK-054  
+**Source**: `docs/frontend-report.md` F-14
+
+`android/app/build.gradle.kts` still signs release builds with the **debug keystore** (template TODO comment), `applicationId` is the Flutter template placeholder, the launcher label is `chore_app`, and `pubspec.yaml` is pinned at `1.0.0+1` with no version bumping — so users cannot cleanly upgrade between CI builds.
+
+**Steps**:
+1. Choose a real `applicationId` (e.g. `dev.ahzed11.choreapp`) and set the launcher label to "ChoreApp" in the main manifest.
+2. Add release keystore support: read keystore path/passwords from `key.properties` (gitignored) or environment variables; fall back to debug signing only when absent, with a build-time warning.
+3. In `.github/workflows/flutter.yml`, decode a base64 keystore from a GitHub secret and pass signing env vars; document the required secrets in the workflow file comments.
+4. Derive `versionCode` in CI (e.g. `--build-number=$GITHUB_RUN_NUMBER`) so each APK upgrade-installs over the previous one.
+
+**Acceptance criteria**:
+- [ ] CI-built APK is signed with the release keystore when secrets are configured.
+- [ ] Two successive CI APKs install as an upgrade (increasing versionCode) without uninstalling.
+- [ ] `applicationId` and app label are no longer template values. NOTE: changing applicationId means existing installs will not upgrade in place — call this out in the commit message.
+
+---
+
+## TASK-064: Flutter — Show Server-Awarded Points Everywhere
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: TASK-051  
+**Source**: `docs/frontend-report.md` §1 (TASK-051 verification), F-24
+
+TASK-051 fixed the weekly-points banner, but the completion snackbars (`chore_list_screen.dart:130`, `my_chores_screen.dart:220`), the confirmation sheet (`chore_card.dart:532`), and the completed-card points pill (`chore_card.dart:187`) still display client-derived `pointValue` instead of the server's authoritative `pointsAwarded`, which the `completeChore` response already contains.
+
+**Steps**:
+1. Have `completeChore` in `chores_provider.dart` return the updated chore (with `pointsAwarded`) and use that value in the success snackbars.
+2. Use `pointsAwarded ?? pointValue` in the completed-card pill.
+3. The pre-completion confirmation sheet may keep the derived value (the award hasn't happened yet) — but source it from a single shared constant map (see TASK-065's dedup) rather than a screen-local copy.
+
+**Acceptance criteria**:
+- [ ] Post-completion UI shows the server's awarded points.
+- [ ] If the backend ever changes the point mapping, no stale client value is displayed after completion.
+
+---
+
+## TASK-065: Flutter — Dead Code Removal and Constant Deduplication
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-15, F-16
+
+~750 lines of dead code and several drifting duplicates:
+- `lib/features/household/screens/invite_screen.dart` (355 lines) + route `AppRoutes.invite` + its test file: never navigated to (the management screen's inline accordion replaced it). Delete all three.
+- `lib/features/household/widgets/member_tile.dart` and `lib/features/leaderboard/widgets/leaderboard_entry_tile.dart`: never imported. Delete.
+- `ChoreFilter`/`ChoreFilterNotifier` (`chores_provider.dart:11-54, 202-232`): never read by any screen (filtering is client-side local state). Delete, or wire to server-side filter params — deleting is fine for MVP.
+- `riverpod_annotation`, `riverpod_generator`, `build_runner` in `pubspec.yaml`: no codegen exists. Remove.
+- Category labels duplicated with diverging text (`chore_model.dart:18-27` "Laundry"/"Garden" vs `create_chore_screen.dart:18-27` "Laundry Room"/"Garden / Outdoor") and effort-point maps duplicated (`chore_model.dart:41-45` vs `create_chore_screen.dart:30-34`): consolidate into a single `lib/core/constants/chore_constants.dart`.
+- `_confirmComplete` duplicated verbatim in `chore_list_screen.dart:117-150` and `my_chores_screen.dart:202-241`: extract a shared helper.
+- Avatar color palette + `_avatarColor` duplicated in 4 files: extract to `shared/`.
+- "find my household / isAdmin" lookup duplicated in 5 widgets: add `householdByIdProvider(id)` / `isAdminProvider(id)`.
+
+**Acceptance criteria**:
+- [ ] `flutter analyze` clean; all tests green after deletions.
+- [ ] Category labels and effort points exist in exactly one place.
+- [ ] No behavioral change visible to users (except now-consistent category labels — pick the `create_chore_screen` wording).
+
+---
+
+## TASK-066: Flutter — Accessibility Pass
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-19
+
+Most tap targets are bare `GestureDetector`s with no semantics: circle icon buttons (`chore_list_screen.dart:389-415`), filter tabs (`:534`), the leaderboard period picker (`leaderboard_screen.dart:276`), the copy-invite button (`household_management_screen.dart:471`). The chore-complete status circle is a 30px target (`chore_card.dart:85-90`), below the 48dp minimum. Overdue/complete state is conveyed by color alone in several places. Only 8 `tooltip`/`Semantics` usages exist in the whole lib.
+
+**Steps**:
+1. Replace bare `GestureDetector` buttons with `IconButton`/`InkWell` or wrap in `Semantics(button: true, label: ...)`.
+2. Enlarge the status-circle hit area to >=48dp (padding or `Material` + `InkWell` with a bigger `customBorder`).
+3. Add non-color signals for overdue (icon already exists on cards — ensure a semantic label too) and completed states.
+4. Run `flutter analyze` and the existing widget tests; add semantics-based finders in tests where practical.
+
+**Acceptance criteria**:
+- [ ] TalkBack announces meaningful labels for all interactive elements on the four main screens.
+- [ ] All tap targets are >=48dp.
+
+---
+
+## TASK-067: Flutter — Low-Priority Fix Batch
+
+**Domain**: Flutter  
+**Priority**: Low  
+**Depends on**: none  
+**Source**: `docs/frontend-report.md` F-17, F-21, F-22, F-23, F-25, F-26, F-27, F-28
+
+Small independent fixes, safe to do in one PR:
+1. **Chore description is write-only** (F-17): show it — e.g. tap a chore card to expand or open a detail bottom sheet displaying description, category, assignee, due date, recurrence.
+2. **`AuthState.copyWith` token trap** (F-21, `auth_state.dart:60-65`): `token ?? this.token` makes clearing impossible; use the sentinel pattern already used in `ChoreFilter.copyWith`.
+3. **Two sources of current-user ID** (F-22): standardize on `currentUserProvider` (`GET /users/me`); remove the client-side JWT decode in `leaderboard_provider.dart:19-45` and the usage in `chore_list_screen.dart:179`.
+4. **Empty displayName crash** (F-23): guard `displayName[0]` at `household_management_screen.dart:869,1022` like the other avatar widgets do.
+5. **Cold-start login flash** (F-25): add a splash/loading route while auth status is `unknown` (`app_router.dart:86-88`).
+6. **Bundle the Outfit font** (F-26): add font assets and `GoogleFonts.config.allowRuntimeFetching = false` so LAN-only installs render correctly on first run.
+7. **Pull-to-refresh on management screen** (F-27): wrap the `SingleChildScrollView` at `household_management_screen.dart:216` in a `RefreshIndicator` invalidating the members provider.
+8. **Dependency bumps** (F-28): raise `flutter_lints`, `go_router`, `intl`, `share_plus` to current majors; fix any resulting deprecations. Also clear the ~17 info-level analyzer findings reported by Flutter stable ≥3.44 (Radio `groupValue`/`onChanged` → `RadioGroup`, `DropdownButtonFormField.value` → `initialValue`, `prefer_const_constructors` in `create_chore_screen.dart` and `household_management_screen.dart`) — CI currently runs `flutter analyze --no-fatal-infos`, so these are reported but not blocking; once cleared, consider dropping the flag.
+9. **`test/widget_test.dart` uses real `FlutterSecureStorage`** (F-20): `_initialize()` throws `MissingPluginException` in the test environment (`auth_state.dart:79-86` has no try/catch). Override the storage/auth provider in the test, and add a try/catch around storage reads in `_initialize` so a broken keystore degrades to logged-out instead of crashing.
+
+**Acceptance criteria**:
+- [ ] Each numbered item verified individually; `flutter analyze` and `flutter test` green.
+- [ ] Chore description is visible somewhere in the UI.
+
+---
+
+## TASK-068: Backend — Fix Broken Login (500 on Every Request) and Stale Integration Test
+
+**Domain**: Backend  
+**Priority**: CRITICAL — login is completely non-functional on this branch  
+**Depends on**: none  
+**Source**: `docs/backend-report.md` C1, H6
+
+TASK-042 (commit `b231179`) removed the `expires_delta` parameter from `create_access_token` in `app/core/security.py:34`, but `app/api/auth.py:78-81` still passes `expires_delta=...`. Every `POST /auth/login` raises `TypeError` → HTTP 500. **68 of 137 tests currently fail** on this. `tests/test_auth_middleware.py:101` also calls the removed kwarg. Separately, `tests/test_integration.py:283-285` still treats `GET /chores` as a bare list even though TASK-039 changed it to a `{items, total, limit, offset}` envelope — that test fails once login is fixed.
+
+**Steps**:
+1. Restore `expires_delta: timedelta | None = None` on `create_access_token` in `app/core/security.py` (when None, fall back to `JWT_EXPIRY_DAYS` as today), OR remove the kwarg from both call sites (`app/api/auth.py:78-81`, `tests/test_auth_middleware.py:101`). Restoring the parameter is preferred — tests use it to mint short-lived tokens.
+2. Fix `tests/test_integration.py:283-285`: `instances = chores_resp.json()["items"]`.
+3. Run the full suite against PostgreSQL: expect 137/137 passing (coverage gate issues are handled separately in TASK-069).
+
+**Acceptance criteria**:
+- [ ] `POST /auth/login` returns 200 with a token pair.
+- [ ] Full test suite passes (ignore the coverage threshold for this task if needed via `--no-cov`).
+
+---
+
+## TASK-069: DevOps — Run CI on All Branches and Fix the Coverage Gate
+
+**Domain**: DevOps  
+**Priority**: High — the reason TASK-068's regression shipped  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H4
+
+`.github/workflows/ci.yml` and `.github/workflows/flutter.yml` trigger only on push/PR to `main`/`master`. All development happens on `claude/*` branches merged locally, so CI never ran on the branch that broke login. Additionally, actual backend coverage is **68.1%** against the `--cov-fail-under=75` gate in `backend/pyproject.toml`, so the next master push fails even with all tests green.
+
+**Steps**:
+1. In both workflows, change the `push` trigger to all branches (`branches: ['**']`) while keeping PR triggers; keep the GHCR image push job restricted to the default branch (it already checks `github.event_name == 'push'` — tighten to `github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'`).
+2. Address the coverage gap: add tests for the least-covered modules (`app/services/redistribution.py` is at ~25%; logout/refresh paths in `app/api/auth.py`) until >=75%, or lower the gate to the measured value and add a comment to ratchet it up.
+3. Add a backend lint step: add `ruff` to the `test` optional dependencies, a `[tool.ruff]` config (with SQLAlchemy-friendly ignores for string annotations), and a `uv run ruff check` step in CI. Fix or noqa existing findings (~9 real ones: unused imports, unused `_COMPLETABLE_STATUSES` in `chores.py:269`, dead `hasattr(value, "model_dump")` branch at `chores.py:487-489`).
+
+**Acceptance criteria**:
+- [ ] Pushing to any branch runs backend tests + lint and the Flutter analyze/test/build.
+- [ ] Image publishing still happens only from the default branch.
+- [ ] CI is green on this branch after TASK-068.
+
+---
+
+## TASK-070: Backend — Short-Lived Access Tokens and JWT Secret Validation
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H2, M12
+
+Access tokens live 7 days (`app/core/config.py:13`) even though rotated 30-day refresh tokens exist and the Flutter app implements the refresh flow — a stolen access token stays valid for a week, and the `revoked_tokens` blocklist only helps on explicit logout. Also, `JWT_SECRET` accepts any string, including the `.env.example` placeholder.
+
+**Steps**:
+1. Add `JWT_EXPIRY_MINUTES: int = 30` to `Settings`; use it in `create_access_token` and in login/refresh `expires_in` responses. Keep `JWT_EXPIRY_DAYS` temporarily as a deprecated fallback (if explicitly set, honor it and log a warning) so existing `.env` files don't break.
+2. Update `.env.example` (both root and backend) accordingly.
+3. Add a `field_validator` on `JWT_SECRET` in `Settings`: require >=32 characters and reject known placeholders (`change-me…`, `replace_with…`). Fail fast at startup with a clear message.
+4. Update tests that assume 7-day expiry; add a test for the validator (placeholder secret → startup error).
+
+**Acceptance criteria**:
+- [ ] New tokens expire in minutes, not days; `expires_in` reflects it.
+- [ ] The Flutter refresh flow keeps sessions alive across expiry (manual or integration check).
+- [ ] Startup fails with a clear error on a short or placeholder `JWT_SECRET`.
+
+---
+
+## TASK-071: Backend — chores.py Correctness Fixes (Pagination Order, Query Param 422, Reassignment Guard)
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` H3, H5, L3
+
+Three small correctness bugs in `app/api/chores.py`:
+1. The paginated list query (`chores.py:210-217`) has no ORDER BY — PostgreSQL gives no ordering guarantee with LIMIT/OFFSET, so pages can repeat or skip rows.
+2. `status_filter` and `category` query params (`chores.py:179-180`) are plain `str`; invalid values reach the native PG enum comparison and return HTTP 500 (verified live).
+3. `PATCH /chores/{iid}/assignee` (`chores.py:372-449`) happily reassigns `complete`/`cancelled` instances.
+
+**Steps**:
+1. Add `.order_by(ChoreInstance.due_date, ChoreInstance.id)` to both the count-consistent data query and any related listing.
+2. Type the query params with the existing `Literal` aliases from `app/schemas/chore.py` (status also needs `overdue`/`cancelled` values — reuse the instance-status type) so FastAPI returns 422.
+3. In the reassignment endpoint, return 409 when the instance status is `complete` or `cancelled`.
+4. Tests: page stability (create 3 instances, fetch limit=2/offset=0 and offset=2, assert no overlap), `?status_filter=bogus` → 422, reassigning a completed instance → 409.
+
+**Acceptance criteria**:
+- [ ] Pagination is deterministic (ordered by due date, then id).
+- [ ] Invalid filter values return 422, not 500.
+- [ ] Terminal instances cannot be reassigned.
+
+---
+
+## TASK-072: Backend — Auth Token Hygiene: Idempotent Logout, Table Cleanup, Replay Hardening
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M1, M2, M10
+
+Three related issues:
+1. Logging out twice with the same token returns 409: `auth.py:184-193` inserts the `jti` into `revoked_tokens` unconditionally; the duplicate-PK `IntegrityError` is swallowed by the blanket handler in `main.py:95-98`.
+2. `revoked_tokens` and `refresh_tokens` grow forever — the cleanup job promised in both model docstrings doesn't exist, and every login adds a refresh-token row with no per-user cap.
+3. Refresh-token replay (reuse of a rotated/revoked token) returns 401 but isn't treated as theft; and `/auth/refresh` returns an untyped bare dict without `expires_in` while login returns `TokenResponse`.
+
+**Steps**:
+1. Make logout idempotent: check for the `jti` first or use `INSERT ... ON CONFLICT DO NOTHING`; return 200 either way.
+2. In `run_daily_job` (`app/tasks/scheduler.py`), delete rows from `revoked_tokens` and `refresh_tokens` whose `expires_at` is in the past.
+3. On refresh with a token that exists but is already revoked/rotated, revoke **all** refresh tokens for that user (standard reuse-detection) and return 401.
+4. Declare `response_model=TokenResponse` on `/auth/refresh` and include `expires_in`.
+5. Consider scoping down the blanket IntegrityError→409 handler (log the constraint name; it currently masks real bugs).
+6. Tests: double logout → 200/200; cleanup removes only expired rows; replay revokes the family; refresh response shape matches login.
+
+**Acceptance criteria**:
+- [ ] Double logout is idempotent.
+- [ ] Expired token rows are purged daily.
+- [ ] Rotated-token replay revokes all of the user's refresh tokens.
+
+---
+
+## TASK-073: Backend — Scheduler Resilience: Run on Startup, Misfire Grace, Backfill Cap, Bulk Assignment
+
+**Domain**: Backend  
+**Priority**: Medium — directly affects self-hosted reliability  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M3, M11
+
+Two self-hosting-relevant scheduler problems (`app/tasks/scheduler.py`):
+1. If the server isn't running at 00:00 UTC (reboot, power cut — common for home servers), the daily job silently skips: no instances generated, nothing flagged overdue, until the next midnight. There is no `misfire_grace_time` and nothing runs at startup.
+2. Instance generation starts from `first_due_date` unbounded (`scheduler.py:130-134`): after extended downtime or a definition created with an old date, a daily chore floods the household with dozens of instantly-overdue instances, each advancing the rotation pointer. Assignment also remains an N+1 (`scheduler.py:140-142` — one `SELECT FOR UPDATE` per new instance).
+
+**Steps**:
+1. In the app lifespan startup, invoke `run_daily_job()` once (it is idempotent and advisory-locked, so multi-worker startup is safe). Also set `misfire_grace_time` (e.g. 6 hours) on the cron trigger.
+2. Cap backfill: start generation at `max(first_due_date, today - GRACE_DAYS)` with `GRACE_DAYS` configurable (default e.g. 3), or track a `last_generated_until` date column on `ChoreDefinition` (requires a migration) — the cap approach is simpler and adequate.
+3. Batch-assign new instances using the single-lock pattern from `AssignmentService.redistribute_chores_bulk` instead of per-instance `auto_assign`.
+4. Tests: startup runs the job once; a definition with `first_due_date` 30 days ago generates only capped instances; assignment acquires the household lock once per household per run.
+
+**Acceptance criteria**:
+- [ ] Restarting the app after missed midnights immediately generates/flags correctly.
+- [ ] No overdue-instance flood after downtime.
+- [ ] One rotation-lock acquisition per household per scheduler run.
+
+---
+
+## TASK-074: DevOps — Production Docker Compose with Startup Migrations
+
+**Domain**: DevOps  
+**Priority**: High for self-hosting  
+**Depends on**: none  
+**Source**: `docs/backend-report.md` M4; old SEC-020/SEC-022
+
+The repo's only `docker-compose.yml` is a dev config: `--reload`, `DEBUG: "true"`, and a bind mount `./backend:/app` that hides the hardened image contents. There is no `env_file:` (so `REFRESH_TOKEN_TTL_DAYS`, `CORS_ALLOWED_ORIGINS`, `SCHEDULER_RUN_HOUR`, `INVITE_TOKEN_TTL_HOURS` can't be set without editing YAML), and migrations must be run manually via `make migrate`. Meanwhile CI already publishes an image to GHCR that nothing references.
+
+**Steps**:
+1. Add `docker-compose.prod.yml` (or a `prod` profile): `api` uses `image: ghcr.io/<owner>/chore-app-api:latest` (documented override for a pinned tag), no source mount, no `--reload`, `DEBUG=false`, `env_file: .env`, `restart: unless-stopped`; `db` unchanged but without the host port mapping (or keep `127.0.0.1:` binding).
+2. Add an entrypoint script to the backend image that runs `alembic upgrade head` before starting uvicorn (single-instance self-host makes this safe). Keep the raw uvicorn CMD usable for dev.
+3. Wire the remaining Settings env vars into the compose environment via `env_file` and document them in the root `.env.example`.
+4. Add `make prod-up` / `make prod-down` targets (and make `podman compose` configurable: `COMPOSE ?= podman compose`).
+5. Verify: `docker compose -f docker-compose.prod.yml up` on a clean machine reaches a healthy API with migrated schema using only `.env`.
+
+**Acceptance criteria**:
+- [ ] Production compose runs the published image with no source mount, no reload, docs disabled.
+- [ ] Fresh deployment migrates automatically and serves `/health` → 200.
+- [ ] All Settings-known env vars are settable via `.env` without YAML edits.
+
+---
+
+## TASK-075: DevOps — Database Backup and Restore
+
+**Domain**: DevOps  
+**Priority**: High for self-hosting  
+**Depends on**: TASK-074  
+**Source**: `docs/backend-report.md` M5
+
+The Postgres volume holds the household's entire data and nothing backs it up. For a self-hosted family app, data loss is the worst realistic failure.
+
+**Steps**:
+1. Add a backup service to the production compose (e.g. `prodrigestivill/postgres-backup-local`) with a daily schedule, 7 daily / 4 weekly retention, writing to a host-mounted `./backups` directory. Alternatively (or additionally) add `make backup` / `make restore FILE=...` targets wrapping `pg_dump -Fc` / `pg_restore`.
+2. Document restore steps in the README (TASK-076): stop api → restore dump → start api.
+3. Test the full cycle: create data, back up, wipe the volume, restore, verify data intact.
+
+**Acceptance criteria**:
+- [ ] Automatic daily dumps land in a host directory with retention.
+- [ ] A documented, tested restore procedure exists.
+
+---
+
+## TASK-076: Docs — Root README and Self-Hosting Guide
+
+**Domain**: Docs  
+**Priority**: High for self-hosting  
+**Depends on**: TASK-074 (references the prod compose), TASK-075 (restore docs)  
+**Source**: `docs/backend-report.md` R1
+
+The repository has no root README — only `flutter_app/README.md` (the Flutter template). A self-hosted-only project needs deployment documentation.
+
+**Steps**:
+1. Write `README.md` at the repo root covering: what the app is (screenshots optional), architecture overview (FastAPI + PostgreSQL + Flutter Android app), quick start for production (clone → copy `.env.example` → generate `JWT_SECRET` → `docker compose -f docker-compose.prod.yml up -d`), how to get the APK (CI artifact) and point it at your server (references the server-URL screen from TASK-057), HTTPS guidance (reverse proxy example with Caddy or nginx — note uvicorn's `--proxy-headers` and the need for `--forwarded-allow-ips` when proxied from another container), backup/restore (from TASK-075), development setup (`make dev`, running tests), and a pointer to `docs/` for requirements/reports/tasks.
+2. Fix `backend/.env.example:52`: the test DB note references a nonexistent `docker-compose.test.yml` and port 5433 while CI/Makefile use 5432 — align the docs with reality.
+
+**Acceptance criteria**:
+- [ ] A newcomer can deploy the stack and connect the app following only the README.
+- [ ] No references to files or ports that don't exist.
+
+---
+
+## TASK-077: Backend — Password Change and Admin Reset
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M6
+
+A forgotten password is currently unrecoverable without raw psql. Email-based reset is overkill for self-host (no SMTP assumption); provide the two flows that work without email.
+
+**Steps**:
+1. Add `POST /users/me/password` with body `{ "current_password": str, "new_password": str }` (new password: same min/max constraints as registration). Verify the current password; on success, update the hash and **revoke all of the user's refresh tokens** (and optionally all outstanding JWTs via a `password_changed_at` claim check — refresh revocation alone is acceptable given TASK-070's short access tokens).
+2. Add a management CLI (e.g. `python -m app.cli reset-password <email>`) that prompts for a new password and updates the hash directly — documented in the README as the "forgot password" recovery path for self-hosters.
+3. Tests: wrong current password → 403; success → old refresh token rejected; CLI updates the hash.
+
+**Acceptance criteria**:
+- [ ] Users can change their password in-app (Flutter UI can follow later).
+- [ ] The server operator can reset any account's password from the host.
+- [ ] Password change invalidates existing refresh tokens.
+
+---
+
+## TASK-078: Backend — Account Deletion and Household Deletion
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M7
+
+Neither `DELETE /users/me` nor `DELETE /households/{id}` exists. FK cascade rules are already defined on the models, so the work is mostly authorization and edge-case semantics.
+
+**Steps**:
+1. `DELETE /households/{household_id}` — admin only; require a confirmation body or `?confirm=<household name>`; hard-delete the household (cascades to memberships, invites, chores, ledger). Return 204.
+2. `DELETE /users/me` — require the current password in the body. Rules: if the user is the sole admin of a household with other active members → 409 directing them to promote someone first; sole member households are deleted outright; otherwise the membership is deactivated and pending chores redistributed (reuse the removal/redistribution service). Then delete the user row (PointLedger rows: decide keep-with-SET NULL vs cascade — check the existing FK and keep history if `SET NULL` is already configured).
+3. Revoke all tokens for the deleted user.
+4. Tests: cascade coverage, sole-admin guard, redistribution on self-delete, token invalidation.
+
+**Acceptance criteria**:
+- [ ] A household can be deleted by its admin with explicit confirmation.
+- [ ] A user can delete their account; remaining households stay consistent.
+- [ ] No orphaned rows violate FK constraints after either operation.
+
+---
+
+## TASK-079: Backend — Email Case Normalization and Leaderboard Window Fixes
+
+**Domain**: Backend  
+**Priority**: Medium  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` M8, M9
+
+Two small correctness items:
+1. Emails are case-sensitive (`auth.py:32,58`): `Alex@gmail.com` and `alex@gmail.com` register as distinct accounts, and login must match registration case exactly.
+2. Leaderboard windows: `leaderboard.py:32-34` uses local `date.today()` (inconsistent with the UTC scheduler; wrong week/month boundaries on non-UTC hosts) and `:54,62` cap the window at `23:59:59`, excluding points awarded in the final second of the period.
+
+**Steps**:
+1. Normalize emails to lowercase on register and login. Add an Alembic migration lowercasing existing rows; guard against collisions (if two accounts differ only by case, fail the migration with a clear message — operator resolves manually). Optionally add a functional unique index on `lower(email)`.
+2. In the leaderboard, compute "today" as `datetime.now(timezone.utc).date()` and make window upper bounds exclusive (`awarded_at < next_period_start`) instead of `<= 23:59:59`.
+3. Tests: mixed-case login succeeds; duplicate-case registration → 409; a ledger entry at `23:59:59.5` on the period's last day counts.
+
+**Acceptance criteria**:
+- [ ] Email uniqueness and login are case-insensitive.
+- [ ] Weekly/monthly windows are UTC-correct and include the entire final second.
+
+---
+
+## TASK-080: Backend — Low-Priority Fix Batch
+
+**Domain**: Backend  
+**Priority**: Low  
+**Depends on**: TASK-068  
+**Source**: `docs/backend-report.md` L1, L2, L4, L5, L8, L9
+
+Small independent fixes, one PR:
+1. **Rotation-pointer adjustment bug** (L1): `redistribution.py:121-130` compares `removed_index` (0..N-1) against the raw unbounded pointer (`assignment.py:55` stores `pointer+1` unmodded), so the decrement fires almost always. Compare against `original_pointer % member_count` (count including the removed member), or store the pointer modulo N. Add regression tests for removal before/at/after the pointer with a pointer > N.
+2. **Invite-accept race** (L2): add `with_for_update()` to the invite-token select in `invites.py:84-117` so a single-use token can't be redeemed twice concurrently.
+3. **Dead code** (L4): remove `_COMPLETABLE_STATUSES` (`chores.py:269`), the dead `hasattr(value, "model_dump")` branch (`chores.py:487-489`), and unused imports (`app/services/assignment.py:3`, `app/db/base.py:1`, test files). (Covered by the lint step if TASK-069 lands first.)
+4. **Test suite speed** (L5): replace the per-test schema drop/create in `conftest.py:78-80` with a session-scoped schema + per-test truncation or transaction rollback. Target: full suite < 1 minute.
+5. **Architecture** (L8, optional if time permits): extract `complete_chore_instance` and `create_chore` orchestration into a `ChoreService` in `app/services/` — do this before implementing notifications.
+6. **Minor endpoints** (L9, optional): `GET /households/{id}/chores/definitions` (list) and `GET .../definitions/{definition_id}` for edit UIs.
+
+**Acceptance criteria**:
+- [ ] Rotation regression tests pass; concurrent invite acceptance yields exactly one member.
+- [ ] Test suite runtime is measurably reduced.
+- [ ] No behavior changes except the fixed bugs.
+
+---
+
+## TASK-081: Backend — Chore Reminder Notifications via ntfy/Gotify Webhook
+
+**Domain**: Backend  
+**Priority**: Low (next feature milestone)  
+**Depends on**: TASK-073  
+**Source**: `docs/backend-report.md` L10
+
+Nothing notifies assignees of due or overdue chores — `flag_overdue_instances` changes a status nobody sees until they open the app. For a self-hosted stack, push via a self-hostable notification service (ntfy or Gotify) or a generic webhook is a much better fit than FCM/APNS (no Google dependency, works with the existing infra).
+
+**Steps**:
+1. Add optional settings: `NOTIFY_URL` (e.g. an ntfy topic URL or Gotify endpoint), `NOTIFY_TOKEN` (optional auth header). Feature is disabled when unset.
+2. In `run_daily_job`, after generation/flagging, send one summary notification per household (or per user if per-user topics are configured — keep MVP simple: one topic): chores due today and newly overdue chores, with assignee display names.
+3. Use `httpx` with a short timeout; failures are logged, never fail the job.
+4. Document setup in the README (run ntfy alongside via compose, subscribe from the phone app).
+5. Tests: notification payload construction; disabled when unset; delivery failure doesn't break the job.
+
+**Acceptance criteria**:
+- [ ] With `NOTIFY_URL` set, the daily job posts a summary of due/overdue chores.
+- [ ] Unset config = no behavior change.
+- [ ] Notification failure never aborts instance generation.
+
+---

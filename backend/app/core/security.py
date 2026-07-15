@@ -10,7 +10,6 @@ from jwt.exceptions import InvalidTokenError
 
 from app.core.config import settings
 
-
 # ---------------------------------------------------------------------------
 # Password helpers
 # ---------------------------------------------------------------------------
@@ -35,7 +34,8 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
     """Return a signed JWT encoding *subject* as the ``sub`` claim.
 
     If *expires_delta* is not provided, the token expires after
-    ``settings.JWT_EXPIRY_DAYS`` days.
+    ``settings.JWT_EXPIRY_DAYS`` days. Tests pass an explicit delta to
+    mint short-lived or already-expired tokens.
     """
     if expires_delta is None:
         expires_delta = timedelta(days=settings.JWT_EXPIRY_DAYS)

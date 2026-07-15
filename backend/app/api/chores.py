@@ -188,7 +188,7 @@ async def list_chores(
     # Build shared filter conditions applied to both the data query and COUNT.
     base_filters = [
         ChoreInstance.household_id == household_id,
-        ChoreDefinition.is_active == True,  # noqa: E712
+        ChoreDefinition.is_active.is_(True),
     ]
     if status_filter is not None:
         base_filters.append(ChoreInstance.status == status_filter)
@@ -469,7 +469,7 @@ async def update_chore_definition(
         select(ChoreDefinition).where(
             ChoreDefinition.id == definition_id,
             ChoreDefinition.household_id == household_id,
-            ChoreDefinition.is_active == True,
+            ChoreDefinition.is_active.is_(True),
         )
     )
     definition = result.scalar_one_or_none()

@@ -1,8 +1,10 @@
 name: CI/CD
 
+# Tests and lint run on every branch push so regressions are caught before
+# merge (see TASK-069); the image publish job below stays default-branch only.
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
   pull_request:
     branches: [main, master]
 
@@ -45,6 +47,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra test
 
+      - name: Lint
+        run: uv run ruff check .
+
       - name: Run tests with coverage
         env:
           DATABASE_URL: postgresql+asyncpg://choreapp:choreapp_test@localhost:5432/choreapp_test
@@ -72,8 +77,8 @@ jobs:
     name: Build & push image
     runs-on: ubuntu-latest
     needs: test
-    # Only push on commits to the main/master branch — not on PRs.
-    if: github.event_name == 'push'
+    # Only push images from the default branch — not from PRs or feature branches.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
     permissions:
       contents: read

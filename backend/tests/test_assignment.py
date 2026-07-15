@@ -1,8 +1,7 @@
 """Tests for app/services/assignment.py — targets 100% line coverage."""
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.household import Household
@@ -14,7 +13,6 @@ from app.services.assignment import (
     RoundRobinStrategy,
     get_assignment_service,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -76,7 +76,8 @@ class HouseholdDashboardScreen extends ConsumerWidget {
   // ---------------------------------------------------------------------------
 
   Future<void> _logout(WidgetRef ref) async {
-    await AuthStorage.clearToken();
+    // logout() must run while the token is still stored: it sends
+    // POST /auth/logout (server-side revocation) before clearing storage.
     await ref.read(authNotifierProvider.notifier).logout();
   }
 
