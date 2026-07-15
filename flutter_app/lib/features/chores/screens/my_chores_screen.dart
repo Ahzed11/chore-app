@@ -325,6 +325,7 @@ class _WeeklyPointsBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      key: const Key('points_banner'),
       margin: const EdgeInsets.fromLTRB(24, 18, 24, 0),
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -540,6 +541,7 @@ class _AllCaughtUpState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      key: const Key('todo_empty_state'),
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 54),
@@ -593,6 +595,7 @@ class _NothingDoneState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      key: const Key('done_empty_state'),
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 54),
