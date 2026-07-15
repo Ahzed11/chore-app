@@ -1,181 +1,149 @@
 # Frontend Report — ChoreApp Flutter
 
-**Date:** 2026-07-02  
-**Branch:** master (`a79405f`)  
+**Date:** 2026-07-15 (supersedes the 2026-07-02 report)
+**Branch:** `claude/brave-ritchie-1owy48`
 **Stack:** Flutter 3.x, Dart 3.12+, Riverpod 2.5, go_router 14, Dio 5.4, flutter_secure_storage 9
+
+> Static review — the Flutter SDK was not available in the review environment, so `flutter analyze` / `flutter test` were not executed locally. CI (`.github/workflows/flutter.yml`) runs both on push.
 
 ---
 
 ## Executive Summary
 
-The Flutter frontend is a well-built, polished app with clean architecture: a clear feature-slice structure, consistent Riverpod state management, good widget decomposition, and solid widget test coverage. The UI is production-quality — custom designs, smooth animations, and thoughtful empty/error/loading states throughout.
+Most of the previous report's findings were fixed (TASK-045 through TASK-051 landed). The architecture remains solid: feature-slice layout, consistent Riverpod patterns, go_router with auth redirects, and 147 widget tests across 10 files.
 
-However, there is one **blocking regression** introduced by the backend TASK-039 change: the chores provider expects a bare JSON array but the backend now returns a paginated envelope `{items, total, limit, offset}`. This will crash the app immediately on the chores screen. Beyond that, the refresh-token flow is absent (400+ line auth interceptor logs the user out on any 401 instead of refreshing), logout never calls the server, and several widget tests reference keys and text that do not match the actual widget tree.
+However, this review found **three critical issues** in the current code:
+
+1. **The release APK cannot make network calls at all** — the main `AndroidManifest.xml` lacks the `INTERNET` permission (only debug/profile manifests have it), and there is no cleartext-traffic config for plain-HTTP self-hosted servers. The CI-built release APK is dead on arrival.
+2. **Logout never revokes tokens server-side** — the dashboard's logout handler clears local storage *before* calling `AuthNotifier.logout()`, so the `POST /auth/logout` call is silently skipped.
+3. **The refresh interceptor can loop indefinitely** on repeated 401s and mishandles concurrent 401s and transient network failures.
+
+Beyond bugs, the single biggest product gap for a self-hosted app: **the server URL is a compile-time constant**. Users installing the CI APK cannot point the app at their own server without building a custom APK.
 
 | Category | Score |
 |---|---|
 | Code Quality | 8 / 10 |
 | Architecture | 8 / 10 |
-| State Management | 8 / 10 |
+| State Management | 7 / 10 |
+| Release Readiness | 3 / 10 |
+| API Contract Alignment | 7.5 / 10 |
 | Test Coverage | 6.5 / 10 |
-| API Contract Alignment | 5 / 10 |
-| Maintainability | 8 / 10 |
-| **Overall Code Quality** | **7.5 / 10** |
-| **Implementation Completeness** | **~78%** |
 
 ---
 
-## 1. Implementation Completeness
+## 1. Verification of Previous Fixes (TASK-045..053)
 
-### Feature Completion by Screen
-
-| Screen / Feature | Completion | Notes |
+| Task | Status | Notes |
 |---|---|---|
-| Login | 95% | Form validation, error display, auto-navigate on success |
-| Register | 95% | 4 fields, confirm-password check, auto-login after register |
-| Household dashboard | 90% | List + create + join by token (URL extraction); no multi-household switcher |
-| Household management | 90% | Members list, role-change, remove, leave guard, QR invite, inline accordion |
-| All Chores list | 85% | Filter tabs, admin delete, tap-to-complete with confirmation sheet; pagination not handled |
-| My Chores | 90% | To-do / done tabs, weekly points banner, rank badge, overdue ordering |
-| Create / Edit Chore | 90% | Full form, edit-mode banner, assignee dropdown, recurrence section |
-| Leaderboard | 95% | Podium for top 3, rest list, three scopes, invite nudge |
-| Auth token management | 40% | Access token stored; refresh token ignored; logout doesn't call server |
-
-### What Is Missing
-
-**Critical (app will crash or break immediately):**
-- `chores_provider.dart` casts the `GET /chores` response to `List<dynamic>` — the backend now returns `{"items": [...], "total": N, "limit": 50, "offset": 0}`. The cast will throw a `TypeError` at runtime.
-
-**High-priority (feature gaps visible to users):**
-- Refresh token flow: login response includes `refresh_token` but it is discarded; when the access token expires (7 days), users are silently logged out
-- Logout does not call `POST /auth/logout` — revoked tokens remain valid on the server until natural expiry
-- No chore reassignment UI — backend `PATCH /{instance_id}/assignee` endpoint exists but no Flutter screen or action reaches it
-- No invite management UI — backend now has `GET /invites` and `DELETE /invites/{id}` but Flutter does not use them
-
-**Medium-priority (correctness / polish):**
-- `deleteChore` in `chores_provider.dart:182` uses a hardcoded URL string; should use `ApiEndpoints`
-- `weeklyPoints` in My Chores uses `chore.pointValue` (derived from effort level) instead of `chore.pointsAwarded` (authoritative server value) — diverges if points are ever overridden
-- `ChoreFilterNotifier` is defined and partially wired but never used for server-side filtering; API calls always fetch all chores
-- No Dio timeout — requests to an unreachable server will hang indefinitely
-- `currentUserIdProvider` decodes the JWT payload client-side to extract `sub`; `currentUserProvider` already has the user ID from `GET /users/me` — two sources of truth for user ID
-
-**Low-priority (test quality):**
-- `chore_list_screen_test.dart` references 7+ keys/text strings that don't exist in the current widget tree (see §3)
-- No tests for the 401 → clearOnUnauthorized path or refresh-token flow
+| TASK-045 paginated chores | **Landed** | `chores_provider.dart:89` reads the `items` envelope. UI still only fetches page 1 — see F-6. |
+| TASK-046 refresh token flow | **Landed, buggy** | Interceptor exists (`api_client.dart:37–63`), tokens persisted on login. Three defects — F-1, F-4, F-5. |
+| TASK-047 server-side logout | **Landed, defeated by caller bug** | `AuthNotifier.logout()` is correct, but its only caller clears the token first — F-2. |
+| TASK-048 stale widget tests | **Landed** | `chore_list_screen_test.dart` rewritten against the current tree (17 tests). |
+| TASK-049 ApiEndpoints constants | **Partial** | Constants added, but `authLogout()`/`authRefresh()` are never used — `auth_state.dart:104,132` still hardcode paths. `choreAssignee`/`revokeInvite` unused because TASK-052/053 were never built. |
+| TASK-050 Dio timeouts | **Mostly landed** | Main client and logout Dio have timeouts; the **refresh Dio at `auth_state.dart:130` has none**. |
+| TASK-051 pointsAwarded | **Landed for the banner only** | `my_chores_screen.dart:115` uses `pointsAwarded ?? pointValue`, but completion snackbars, the confirm sheet, and the completed-card pill still show client-derived `pointValue`. |
+| TASK-052 reassignment UI | **NOT implemented** | Zero call sites for `ApiEndpoints.choreAssignee`; admin menu has only "Delete series". |
+| TASK-053 invite management UI | **NOT implemented** | `InviteApi` only exposes `generateInvite`. Both invite UIs generate a **new** token on every open, so unrevokable tokens accumulate server-side. |
 
 ---
 
-## 2. Architecture & Code Quality
+## 2. Findings
 
-### Strengths
+### Critical
 
-**Feature-slice structure** is well-enforced. Each feature directory owns its models, providers, screens, and widgets. Cross-feature dependencies go through named providers, never direct screen imports.
+**F-1. [Bug] Refresh interceptor can retry-loop indefinitely on repeated 401s** — `lib/core/api/api_client.dart:41–60`
+`isRefreshing` is reset to `false` *before* `dio.fetch(opts)` retries the original request. If the retry 401s again (revoked user, backend rejecting the new token for a non-expiry reason), the interceptor refreshes again — and since the backend rotates refresh tokens, each refresh succeeds, producing an infinite 401 → refresh → retry loop. There is no per-request "already retried" marker. The interceptor also fires for 401s from `/auth/login` and `/auth/register`, so a wrong password triggers a pointless refresh attempt.
+*Fix:* set `error.requestOptions.extra['retried'] = true` before `dio.fetch` and skip the refresh branch when that flag (or an `/auth/` path) is present.
 
-**Consistent Riverpod patterns** throughout. `FamilyAsyncNotifier` for household-scoped chores, `FutureProvider.family` for leaderboard, `Notifier` for local UI state (filter, scope). The optimistic update in `completeChore` (snapshot → optimistic → server confirm → revert on error) is implemented correctly.
-
-**go_router with `refreshListenable`** — The `_AuthStateListenable` bridge in `app_router.dart` correctly converts Riverpod state to a `Listenable` that GoRouter can watch. Auth redirects are declarative and reliable.
-
-**Widget test infrastructure** — Every screen has a dedicated test file with fake notifier subclasses, `ProviderScope` overrides, and distinct loading/error/data states. The pattern is solid, just the assertions are stale.
-
-**Error and empty states** — All async widgets have distinct loading, error, and empty renderings with retry buttons. `AppErrorWidget` and `LoadingWidget` are shared components used consistently.
-
-### Weaknesses
-
-**Auth interceptor logs out on any 401** (`api_client.dart`):
+**F-2. [Bug] Logout never revokes the token server-side** — `lib/features/household/screens/household_dashboard_screen.dart:78–81`
 ```dart
-// Current behaviour — line ~37
-onError: (e, handler) async {
-  if (e.response?.statusCode == 401) {
-    await ref.read(authNotifierProvider.notifier).clearOnUnauthorized();
-  }
-  handler.next(e);
-},
+Future<void> _logout(WidgetRef ref) async {
+  await AuthStorage.clearToken();               // clears token first
+  await ref.read(authNotifierProvider.notifier).logout();  // reads null token → skips POST /auth/logout
+}
 ```
-This should attempt a token refresh first, then fall back to logout only on refresh failure.
+Silently defeats TASK-047. *Fix:* delete the `AuthStorage.clearToken()` line; `logout()` already clears both tokens.
 
-**Two user-ID sources** — `currentUserIdProvider` (JWT decode) vs. `currentUserProvider` (API call). The JWT-decoded ID is used in `chore_list_screen.dart:179` for "is this my chore" logic. If the JWT `sub` claim ever diverges from the user's DB ID these will disagree.
+**F-3. [Bug] Release APK has no INTERNET permission** — `android/app/src/main/AndroidManifest.xml`
+Only `src/debug` and `src/profile` manifests declare `android.permission.INTERNET`. The release APK CI builds cannot make any network call. Additionally, the default base URL is `http://` with no `usesCleartextTraffic`/network-security-config, so even with the permission Android 9+ blocks plaintext HTTP to a self-hosted LAN server.
+*Fix:* add the permission to the main manifest plus a network security config (or HTTPS guidance).
 
-**`ChoreFilterNotifier` is dead code** — It tracks `status`, `category`, and `assigneeId` filter state, but `_fetchChores` in `ChoresNotifier` only passes filters if explicitly called. The filter notifier is never read in any screen; filtering is applied purely client-side after a full list fetch.
+### High
 
-**`deleteChore` bypasses `ApiEndpoints`** (`chores_provider.dart:182`):
-```dart
-await dio.delete<void>('/households/$householdId/chores/$definitionId');
-```
-All other calls go through `ApiEndpoints` static methods. This one hardcodes the path, making URL refactoring harder.
+**F-4. [Bug] Concurrent 401s: only one request is retried, the rest surface errors** — `api_client.dart:41`
+Screens fire 3+ requests in parallel. On token expiry the first 401 starts the refresh; every other in-flight 401 hits `!isRefreshing == false` and passes straight through as an error, so the user sees random error widgets even though refresh succeeded.
+*Fix:* queue subsequent 401s on a shared `Completer<bool>` and retry them all when the refresh resolves.
 
----
+**F-5. [Bug] Transient network failure during refresh logs the user out** — `lib/core/auth/auth_state.dart:141–144`
+`refresh()`'s `catch (_)` treats *any* failure — timeout, DNS, server reboot — as auth failure and wipes both tokens. On a self-hosted server users will be randomly logged out. The refresh Dio also has no timeouts (line 130).
+*Fix:* only clear tokens on 401/403 from the refresh endpoint; on network errors return `false` without clearing; add timeouts.
 
-## 3. Test Quality
+**F-6. [Bug] Chore list silently truncated to the first 50 chores** — `lib/features/chores/providers/chores_provider.dart:84–93`
+The fetch sends no `limit`/`offset` and ignores `total`; the backend default limit is 50. Older items vanish, and the client-side weekly-points computation (`my_chores_screen.dart:111–115`) becomes quietly wrong.
+*Fix:* loop pages until `items.length == total` or add infinite scroll; longer term, take weekly points from the leaderboard response.
 
-### Coverage
+**F-7. [Missing feature] No runtime server-URL configuration for a self-hosted backend** — `lib/core/config/app_config.dart:4–7`
+`API_BASE_URL` is a compile-time `String.fromEnvironment` defaulting to the Android-emulator localhost. Users installing the CI APK cannot point the app at their own server. The single biggest gap for a self-hosted product.
+*Fix:* first-run/settings "Server URL" screen persisted in storage, validated via `GET /health` (constant already exists, unused); make `dioProvider` watch it.
 
-| Test file | Tests | Passes today? |
-|---|---|---|
-| `login_screen_test.dart` | ~8 | Likely — standard Material widget keys used |
-| `register_screen_test.dart` | ~6 | Likely |
-| `household_dashboard_test.dart` | ~6 | Likely |
-| `household_management_test.dart` | ~10 | Likely |
-| `chore_list_screen_test.dart` | 15 | **No** — stale assertions |
-| `my_chores_screen_test.dart` | ~8 | Unknown |
-| `create_chore_screen_test.dart` | ~8 | Likely |
-| `leaderboard_screen_test.dart` | ~6 | Likely |
+**F-8. [Bug/dead code] Chore editing is unreachable** — `lib/features/chores/models/chore_form_init_data.dart`
+`CreateChoreScreen` fully supports edit mode, but `ChoreFormInitData` is never constructed anywhere — no navigation passes it and the admin long-press menu has no "Edit" item. Also, once wired: the due-date validator (`create_chore_screen.dart:455–464`) rejects past dates even in edit mode.
+*Fix:* add "Edit series" to the admin menu; relax past-date validation in edit mode.
 
-### Stale Assertions in `chore_list_screen_test.dart`
+**F-9. [Missing feature] TASK-052 (reassignment UI) and TASK-053 (invite list/revoke UI) still open** — backend endpoints and `ApiEndpoints` constants are ready; only UI + notifier methods are missing.
 
-The test file was written against a prior design of the chore list screen that used `FilterChip` widgets and different widget keys. The current screen uses plain `GestureDetector` tabs.
+**F-10. [Missing feature] Invite links don't deep-link into the app** — `AndroidManifest.xml`, `lib/router/app_router.dart`
+Scanning the invite QR opens a browser at the API server, not the app; joining requires manual copy-paste.
+*Fix:* intent-filter for the invite URL pattern (or custom scheme), a GoRouter `/invites/:token` route calling `joinByToken`, and stash-token-then-redirect handling for the logged-out case.
 
-| Line | Assertion | Actual widget |
-|---|---|---|
-| 225 | `find.byKey(Key('overdue_warning_icon'))` | `_StatusCircle` uses `Icon(Icons.priority_high)` with no key |
-| 253 | `find.byKey(Key('status_chip_All'))` | No `FilterChip` — screen uses custom `GestureDetector` tabs |
-| 256 | `find.byKey(Key('status_chip_Pending'))` | Same — no FilterChip |
-| 269 | `tester.widget<FilterChip>(...)` | No FilterChip in widget tree |
-| 295 | `find.byKey(Key('my_chores_chip'))` | No chip — My Chores is bottom nav item |
-| 395 | `find.text('No chores found')` | Actual empty state shows `'All clear!'` |
-| 424 | `find.text('Something went wrong')` | `AppErrorWidget` message text may differ |
+**F-11. [Bug] Leaderboard/rank state is stale after completing chores** — `chores_provider.dart:101–147`
+`completeChore` never invalidates `leaderboardProvider`/`weeklyLeaderboardProvider`, so the rank pill and Leaderboard tab show pre-completion data. Same class of issue: `removeMember`/`changeRole` don't invalidate chores (assignee names go stale); `leaveHousehold`/`joinByToken` don't invalidate members/chores families.
+*Fix:* invalidate the related providers after each successful mutation.
 
----
+### Medium
 
-## 4. API Contract Alignment
+**F-12. [Improvement] Raw exception strings shown to users** — `shared/widgets/error_widget.dart:38` plus ~10 call sites. `error.toString()` on a `DioException` dumps the request URL and boilerplate. Map DioException → friendly message in one shared helper; `_extractMessage` (`auth_provider.dart:112`) is a start but auth-only, and it renders FastAPI 422 validation lists as raw JSON.
 
-### Backend endpoints not yet called by Flutter
+**F-13. [Bug] Household rename has no error handling** — `household_management_screen.dart:230–238`. No try/catch; on failure the edit UI stays open with no feedback. The screen also lacks an admin guard, unlike `CreateChoreScreen`.
 
-| Endpoint | Status in Flutter |
-|---|---|
-| `POST /auth/logout` | Not called — logout only clears local storage |
-| `POST /auth/refresh` | Not called — no refresh token flow |
-| `GET /households/{id}/invites` | Not called |
-| `DELETE /households/{id}/invites/{id}` | Not called |
-| `PATCH /households/{id}/chores/{iid}/assignee` | Not called |
+**F-14. [Improvement] Release build config is template state** — `android/app/build.gradle.kts`. Release signs with the debug keystore (TODO comment), `applicationId` is the template placeholder, app label is `chore_app`, and `pubspec.yaml` version is static `1.0.0+1` with no CI bump.
 
-### Endpoint contracts that are broken
+**F-15. [Improvement] Dead code (~750 lines)** —
+- `invite_screen.dart` (355 lines) + route `AppRoutes.invite`: never navigated to; the management screen's inline accordion replaced it.
+- `member_tile.dart` (245) and `leaderboard_entry_tile.dart` (143): never imported.
+- `ChoreFilter`/`ChoreFilterNotifier` (`chores_provider.dart:11–54, 202–232`): still dead (carried over from the previous report); screens filter client-side.
+- `riverpod_annotation` + `riverpod_generator` + `build_runner` in `pubspec.yaml`: no codegen is used anywhere.
 
-| Issue | File | Detail |
-|---|---|---|
-| Paginated chores response | `chores_provider.dart:84` | Casts to `List<dynamic>`; backend returns `{items, total, limit, offset}` |
+**F-16. [Improvement] Duplicated constants and flows** — category labels duplicated with *diverging* text (`chore_model.dart:18–27` vs `create_chore_screen.dart:18–27`); effort points duplicated; `_confirmComplete` duplicated verbatim in two screens; avatar palette duplicated in 4 files; "find my household / isAdmin" lookup duplicated in 5 widgets (extract `householdByIdProvider(id)` / `isAdminProvider(id)`).
 
-### Missing `ApiEndpoints` constants
+**F-17. [UX gap] Chore `description` is write-only** — collected by the form, parsed by the model, never displayed anywhere. Add a tap-to-expand or detail sheet.
 
-`api_endpoints.dart` is missing:
-- `authLogout` → `POST /auth/logout`
-- `authRefresh` → `POST /auth/refresh`
-- `householdInvites(id)` → `GET /households/{id}/invites`
-- `revokeInvite(householdId, inviteId)` → `DELETE /households/{id}/invites/{inviteId}`
-- `choreAssignee(householdId, instanceId)` → `PATCH /households/{id}/chores/{iid}/assignee`
+**F-18. [UX gap] No i18n and no dark theme** — all strings hardcoded English; only a light theme exists and screens hardcode ~30 hex colors per file. Acceptable MVP debt — if a dark theme is ever wanted, first migrate screen-local colors into the theme.
 
----
+**F-19. [Improvement] Accessibility** — most tap targets are bare `GestureDetector`s with no semantics; the 30px status-circle complete target (`chore_card.dart:85–90`) is below the 48dp minimum; overdue/complete state is conveyed by color alone in several places. Replace with `IconButton`/`InkWell` + `Semantics`, enlarge hit areas.
 
-## 5. Security Observations
+**F-20. [Test gaps]** — zero tests for the riskiest code: refresh interceptor, `AuthNotifier`, provider mutation+invalidation logic (F-1/F-2/F-4/F-5 would have been caught by a Dio mock-adapter test). `test/widget_test.dart` pumps the real app with real `FlutterSecureStorage`, which throws `MissingPluginException` in the test env (`auth_state.dart:79–86` has no try/catch).
 
-All security concerns are **low severity** for a self-hosted personal app:
+### Low
 
-- **Access token stored in `flutter_secure_storage`** — correct; Keystore-backed on Android
-- **JWT decoded client-side for user ID** (`leaderboard_provider.dart:19`) — acceptable for UI highlighting; not used for authorization decisions
-- **Refresh token discarded on login** — no security risk currently (only access tokens used), but means no ability to call the refresh endpoint when added
-- **Logout doesn't revoke server-side** — access tokens remain valid until expiry (7 days). For a household app this is acceptable
+**F-21.** `AuthState.copyWith` can't clear the token (`token ?? this.token` trap) — `auth_state.dart:60–65`.
+**F-22.** Two sources of truth for current user ID persist: JWT decode (`leaderboard_provider.dart:19–45`) vs `GET /users/me`. Standardize on `currentUserProvider`.
+**F-23.** Empty `displayName` crashes avatars — `household_management_screen.dart:869,1022` index `[0]` without a guard.
+**F-24.** Timezone edges: `ChoreModel.isOverdue` and the Monday `weekStart` use device-local midnight vs the server's UTC scheduler; weekly points can mis-bucket near boundaries. Prefer server-computed points.
+**F-25.** Cold-start login flash: router shows `/login` while auth status is `unknown`, then jumps. Add a splash route.
+**F-26.** `google_fonts` fetches Outfit at runtime — fails silently on LAN-only setups. Bundle the font and disable runtime fetching.
+**F-27.** Pull-to-refresh missing on the household management screen.
+**F-28.** Dependency majors behind: `flutter_lints ^4` (6.x current), `go_router ^14` (16.x), `intl ^0.19`, `share_plus ^10`. Not urgent; schedule a bump and drop unused codegen deps.
 
 ---
 
-## 6. Actionable Tasks
+## 3. Suggested Order of Work
 
-See `docs/tasks.md` tasks TASK-045 through TASK-053.
+1. F-3 (INTERNET permission + cleartext config) and F-2 (logout ordering) — two tiny fixes with outsized impact.
+2. F-1/F-4/F-5 — harden the refresh interceptor, with Dio mock-adapter tests (F-20).
+3. F-7 — runtime server URL screen (the self-hosted headline feature).
+4. F-6 + F-11 — pagination and post-mutation invalidation.
+5. F-8/F-9/F-10 — chore edit entry point, TASK-052/053, invite deep links.
+6. Medium/low cleanup batch: F-12..F-19, dead-code deletion, release signing.
+
+Corresponding tasks: see `docs/tasks.md` TASK-054 onward.
