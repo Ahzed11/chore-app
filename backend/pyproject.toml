@@ -31,3 +31,10 @@ test = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=app --cov-fail-under=75"
+
+[tool.coverage.run]
+# SQLAlchemy's async engine executes query compilation/execution inside a
+# greenlet via greenlet_spawn(); without this, coverage.py's tracer is not
+# reattached after crossing into that greenlet, so most statements in async
+# DB-touching functions are (mis)reported as uncovered even when exercised.
+concurrency = ["greenlet", "thread"]
