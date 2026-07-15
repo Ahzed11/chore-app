@@ -738,6 +738,7 @@ class _HeroCard extends StatelessWidget {
               const SizedBox(width: 8),
               if (!isEditingName)
                 GestureDetector(
+                  key: const Key('edit_name_button'),
                   onTap: onStartEdit,
                   child: Container(
                     width: 38,
@@ -1071,6 +1072,7 @@ class _MemberRow extends ConsumerWidget {
           ),
           if (canManage)
             GestureDetector(
+              key: Key('member_menu_${member.userId}'),
               onTap: () =>
                   _showMemberActions(context, ref, member, householdId),
               child: Container(
