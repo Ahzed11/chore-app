@@ -1,8 +1,10 @@
 name: Flutter
 
+# Analyze/test/build run on every branch push so regressions are caught
+# before merge (see TASK-069).
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
   pull_request:
     branches: [main, master]
 

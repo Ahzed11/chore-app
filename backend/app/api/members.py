@@ -9,7 +9,6 @@ Routes (all scoped to /households/{household_id}):
 import uuid
 
 import structlog
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession

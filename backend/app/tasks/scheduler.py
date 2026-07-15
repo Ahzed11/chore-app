@@ -4,9 +4,9 @@ TASK-012: Provides generate_chore_instances, flag_overdue_instances, run_daily_j
 start_scheduler, and stop_scheduler. Integrate with FastAPI's lifespan event — see the
 comment block at the bottom of this module for the exact snippet to add to main.py.
 """
-import structlog
 from datetime import date, datetime, timedelta, timezone
 
+import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import select, text, update

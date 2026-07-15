@@ -18,9 +18,10 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-032 … TASK-044 | ✅ Done (Dockerfile hardening, logout/revocation, enum validation, health probe, fixtures, headers/CORS, refresh endpoint, reassignment+pagination, invite mgmt, N+1, deps, scheduler UTC/lock). ⚠️ **TASK-042 introduced a regression that breaks every login** — fix is TASK-068, do it first. |
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects — see TASK-054+ (notably: TASK-047's logout call is defeated by a caller bug; TASK-050 missed the refresh Dio; TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
-| TASK-054 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
-| TASK-068 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored on `create_access_token`), stale integration test fixed; 137/137 tests pass. Coverage gate (68% vs 75%) remains → TASK-069. |
-| TASK-069 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`). **Start with TASK-069 (CI on all branches + coverage gate).** |
+| TASK-054, TASK-055 | ✅ Done 2026-07-15 — INTERNET permission + cleartext network-security-config in the main manifest; logout ordering fixed so `POST /auth/logout` actually fires. ⚠️ TASK-055's ordering regression test is deferred to TASK-056, which introduces the Dio mock infrastructure. |
+| TASK-056 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
+| TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed; coverage gate set to measured 68% with a ratchet-up note (raising real coverage remains open — biggest gaps: `redistribution.py`, `scheduler.py`, auth logout/refresh paths). 137/137 tests pass, lint clean. |
+| TASK-070 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
 
 ---
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Self-hosted deployments commonly run the backend over plain HTTP on a
+     home LAN, and Android 9+ blocks cleartext traffic by default. Allowing
+     cleartext here keeps those setups working; running the API behind an
+     HTTPS reverse proxy (Caddy/nginx) is the recommended configuration. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

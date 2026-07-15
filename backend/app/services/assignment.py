@@ -1,9 +1,12 @@
-from typing import Protocol, runtime_checkable
 import uuid
-from sqlalchemy import select, update
+from typing import Protocol, runtime_checkable
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.household import Household
 from app.models.household_membership import HouseholdMembership
+
 
 @runtime_checkable
 class AssignmentStrategy(Protocol):
@@ -38,7 +41,7 @@ class RoundRobinStrategy:
             select(HouseholdMembership.user_id)
             .where(
                 HouseholdMembership.household_id == household_id,
-                HouseholdMembership.is_active == True,
+                HouseholdMembership.is_active.is_(True),
             )
             .order_by(HouseholdMembership.joined_at.asc())
         )
@@ -121,7 +124,7 @@ class AssignmentService:
             select(HouseholdMembership.user_id)
             .where(
                 HouseholdMembership.household_id == household_id,
-                HouseholdMembership.is_active == True,  # noqa: E712
+                HouseholdMembership.is_active.is_(True),
             )
             .order_by(HouseholdMembership.joined_at.asc())
         )

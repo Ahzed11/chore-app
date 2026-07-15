@@ -21,8 +21,8 @@ if config.config_file_name is not None:
 # Additional model modules must be imported here (or inside app/db/base.py)
 # so that their tables appear in Base.metadata.
 # ---------------------------------------------------------------------------
-from app.db.base import Base  # noqa: E402
 import app.models  # noqa: E402,F401  — triggers model registration
+from app.db.base import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

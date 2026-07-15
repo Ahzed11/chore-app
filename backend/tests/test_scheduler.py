@@ -24,7 +24,6 @@ from app.models.household_membership import HouseholdMembership
 from app.models.user import User
 from app.tasks.scheduler import flag_overdue_instances, generate_chore_instances
 
-
 # ---------------------------------------------------------------------------
 # Constants and builder helpers
 # ---------------------------------------------------------------------------

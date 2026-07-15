@@ -11,7 +11,6 @@ from app.models.chore_instance import ChoreInstance
 from app.models.household_membership import HouseholdMembership
 from tests.conftest import get_test_database_url as _get_test_database_url
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

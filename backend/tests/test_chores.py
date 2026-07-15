@@ -18,7 +18,6 @@ from app.models.user import User
 from main import app
 from tests.conftest import get_test_database_url as _get_test_database_url
 
-
 # ---------------------------------------------------------------------------
 # Fake users for dependency override
 # ---------------------------------------------------------------------------
@@ -508,6 +507,7 @@ async def test_delete_chore_cancels_pending(async_client: AsyncClient) -> None:
     # that a second (pending) instance is cancelled but the complete one is not.
     # We do that by creating a second chore of the same definition via direct DB manipulation.
     from sqlalchemy import select as sa_select
+
     from app.models.chore_instance import ChoreInstance
 
     async with sf() as session:
@@ -579,7 +579,8 @@ async def test_member_cannot_create_chore(async_client: AsyncClient) -> None:
     household_id, _ = await _seed_household_with_member(sf)
 
     # Override require_admin to raise 403 (simulating a member, not admin)
-    from fastapi import HTTPException, status as http_status
+    from fastapi import HTTPException
+    from fastapi import status as http_status
 
     def override_require_admin_forbidden():
         raise HTTPException(

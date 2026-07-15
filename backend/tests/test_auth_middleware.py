@@ -7,11 +7,9 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from fastapi import APIRouter, Depends
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.deps import get_current_user, require_household_member
 from app.core.security import create_access_token
