@@ -1,9 +1,10 @@
 import 'dart:async';
 
+import 'package:chore_app/features/household/models/household_model.dart';
+import 'package:chore_app/features/household/providers/household_provider.dart';
 import 'package:chore_app/features/leaderboard/models/leaderboard_model.dart';
 import 'package:chore_app/features/leaderboard/providers/leaderboard_provider.dart';
 import 'package:chore_app/features/leaderboard/screens/leaderboard_screen.dart';
-import 'package:chore_app/features/leaderboard/widgets/leaderboard_entry_tile.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:chore_app/shared/widgets/error_widget.dart';
 import 'package:chore_app/shared/widgets/loading_widget.dart';
@@ -49,6 +50,26 @@ LeaderboardResult _result({
     entries: entries ?? [],
     requestingUserRank: requestingUserRank,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Fake notifiers
+// ---------------------------------------------------------------------------
+
+/// Avoids a real Dio network call from `householdsNotifierProvider`, which
+/// [LeaderboardScreen] watches to determine `isAdmin`. Without this override
+/// the request never resolves and leaves a pending timer at test teardown.
+class _FakeHouseholdsNotifier extends HouseholdsNotifier {
+  @override
+  Future<List<HouseholdModel>> build() async => const [];
+}
+
+class _FixedScopeNotifier extends LeaderboardScopeNotifier {
+  _FixedScopeNotifier(this._initial);
+  final LeaderboardScope _initial;
+
+  @override
+  LeaderboardScope build() => _initial;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,24 +131,13 @@ Widget buildLeaderboardScreen({
       leaderboardScopeNotifierProvider.overrideWith(
         () => _FixedScopeNotifier(initialScope),
       ),
+      householdsNotifierProvider.overrideWith(_FakeHouseholdsNotifier.new),
     ],
     child: MaterialApp.router(
       theme: AppTheme.lightTheme,
       routerConfig: router,
     ),
   );
-}
-
-// ---------------------------------------------------------------------------
-// Fixed scope notifier for tests that need a specific initial scope
-// ---------------------------------------------------------------------------
-
-class _FixedScopeNotifier extends LeaderboardScopeNotifier {
-  _FixedScopeNotifier(this._initial);
-  final LeaderboardScope _initial;
-
-  @override
-  LeaderboardScope build() => _initial;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +150,15 @@ void main() {
       await tester.pumpWidget(buildLeaderboardScreen());
       await tester.pump();
 
-      // SegmentedButton renders each segment as a button-like widget.
-      // The label texts should all be present.
-      expect(find.text('All Time'), findsOneWidget);
+      // The default (allTime) scope label also appears in the range-label
+      // subtitle below the picker, so it can legitimately show up twice.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('scope_selector')),
+          matching: find.text('All Time'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('This Week'), findsOneWidget);
       expect(find.text('This Month'), findsOneWidget);
     });
@@ -188,6 +204,8 @@ void main() {
               },
             ),
             currentUserIdProvider.overrideWithValue(_currentUserId),
+            householdsNotifierProvider
+                .overrideWith(_FakeHouseholdsNotifier.new),
           ],
           child: MaterialApp.router(
             theme: AppTheme.lightTheme,
@@ -308,11 +326,14 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  // Rank styling
+  // Rank styling — the podium redesign encodes 1st/2nd/3rd place via the
+  // avatar's border colour (gold/silver/bronze) rather than a separate
+  // circular badge. Ranks 4+ fall through to the plain `_RestList` rows.
   // -------------------------------------------------------------------------
 
   group('LeaderboardScreen – rank badge styling', () {
-    testWidgets('rank 1 entry has a gold circular badge', (tester) async {
+    testWidgets('rank 1 entry has a gold podium avatar border',
+        (tester) async {
       final entries = [
         _entry(rank: 1, userId: 'u1', displayName: 'Alice', points: 100),
         _entry(rank: 2, userId: 'u2', displayName: 'Bob', points: 80),
@@ -327,19 +348,17 @@ void main() {
       );
       await tester.pump();
 
-      // The badge for rank 1 has Key('rank_badge_1').
-      final badge1 = find.byKey(const Key('rank_badge_1'));
-      expect(badge1, findsOneWidget);
+      final avatar = find.byKey(const Key('podium_avatar_1'));
+      expect(avatar, findsOneWidget);
 
-      // Verify it is a Container with a circular BoxDecoration using amber.
-      final container = tester.widget<Container>(badge1);
+      final container = tester.widget<Container>(avatar);
       final decoration = container.decoration as BoxDecoration;
       expect(decoration.shape, BoxShape.circle);
-      // Colors.amber is a MaterialColor; its value is 0xFFFFC107.
-      expect(decoration.color, Colors.amber);
+      expect(decoration.border!.top.color, const Color(0xFFFBBF24));
     });
 
-    testWidgets('rank 2 entry has a silver circular badge', (tester) async {
+    testWidgets('rank 2 entry has a silver podium avatar border',
+        (tester) async {
       final entries = [
         _entry(rank: 1, userId: 'u1', displayName: 'Alice', points: 100),
         _entry(rank: 2, userId: 'u2', displayName: 'Bob', points: 80),
@@ -353,14 +372,14 @@ void main() {
       );
       await tester.pump();
 
-      final badge2 = find.byKey(const Key('rank_badge_2'));
-      expect(badge2, findsOneWidget);
+      final avatar = find.byKey(const Key('podium_avatar_2'));
+      expect(avatar, findsOneWidget);
 
-      final container = tester.widget<Container>(badge2);
+      final container = tester.widget<Container>(avatar);
       final decoration = container.decoration as BoxDecoration;
       expect(decoration.shape, BoxShape.circle);
-      // Grey.shade400 has similar R/G/B channels.
-      final color = decoration.color!;
+      // Grey/slate tones have similar R/G/B channels.
+      final color = decoration.border!.top.color;
       final r = (color.r * 255).round();
       final g = (color.g * 255).round();
       final b = (color.b * 255).round();
@@ -369,10 +388,11 @@ void main() {
         (g - b).abs(),
         (r - b).abs(),
       ].reduce((a, c) => a > c ? a : c);
-      expect(maxDiff, lessThan(20));
+      expect(maxDiff, lessThan(25));
     });
 
-    testWidgets('rank 3 entry has a bronze circular badge', (tester) async {
+    testWidgets('rank 3 entry has a bronze podium avatar border',
+        (tester) async {
       final entries = [
         _entry(rank: 1, userId: 'u1', displayName: 'Alice', points: 100),
         _entry(rank: 2, userId: 'u2', displayName: 'Bob', points: 80),
@@ -387,16 +407,16 @@ void main() {
       );
       await tester.pump();
 
-      final badge3 = find.byKey(const Key('rank_badge_3'));
-      expect(badge3, findsOneWidget);
+      final avatar = find.byKey(const Key('podium_avatar_3'));
+      expect(avatar, findsOneWidget);
 
-      final container = tester.widget<Container>(badge3);
+      final container = tester.widget<Container>(avatar);
       final decoration = container.decoration as BoxDecoration;
       expect(decoration.shape, BoxShape.circle);
-      expect(decoration.color, const Color(0xFFCD7F32));
+      expect(decoration.border!.top.color, const Color(0xFFE0B48C));
     });
 
-    testWidgets('rank 4+ entry has no circular badge', (tester) async {
+    testWidgets('rank 4+ entry has no podium avatar', (tester) async {
       final entries = [
         _entry(rank: 1, userId: 'u1', displayName: 'Alice', points: 100),
         _entry(rank: 2, userId: 'u2', displayName: 'Bob', points: 80),
@@ -412,20 +432,20 @@ void main() {
       );
       await tester.pump();
 
-      // No Key for rank 4 badge means no circular badge exists.
-      expect(find.byKey(const Key('rank_badge_4')), findsNothing);
-      // But the text '4' should still appear somewhere (the plain text label).
+      // Rank 4 falls into the plain rest-list, not the podium.
+      expect(find.byKey(const Key('podium_avatar_4')), findsNothing);
+      // But its rank number is still shown as plain text.
       expect(find.text('4'), findsOneWidget);
     });
   });
 
   // -------------------------------------------------------------------------
-  // Current user highlighting
+  // Current user highlighting — the podium redesign marks the current user
+  // with a "YOU" pill instead of a highlighted list-row background.
   // -------------------------------------------------------------------------
 
   group('LeaderboardScreen – current user highlighting', () {
-    testWidgets('current user row has highlighted background',
-        (tester) async {
+    testWidgets('current user gets a "YOU" pill', (tester) async {
       final entries = [
         _entry(rank: 1, userId: _currentUserId, displayName: 'Alice', points: 85),
         _entry(rank: 2, userId: 'other-user', displayName: 'Bob', points: 40),
@@ -439,64 +459,25 @@ void main() {
       );
       await tester.pump();
 
-      // The tile for the current user uses ValueKey with the userId.
-      final currentUserTile = find.byKey(
-        const ValueKey('leaderboard_entry_$_currentUserId'),
-      );
-      expect(currentUserTile, findsOneWidget);
-
-      // The container has a non-null color (the highlight).
-      final container = tester.widget<Container>(currentUserTile);
-      expect(container.color, isNotNull);
+      expect(find.text('YOU'), findsOneWidget);
     });
 
-    testWidgets('other user row has no highlighted background',
+    testWidgets('no "YOU" pill is shown when the viewer is not in the list',
         (tester) async {
       final entries = [
-        _entry(rank: 1, userId: _currentUserId, displayName: 'Alice', points: 85),
+        _entry(rank: 1, userId: 'alice-id', displayName: 'Alice', points: 85),
         _entry(rank: 2, userId: 'other-user', displayName: 'Bob', points: 40),
       ];
 
       await tester.pumpWidget(
         buildLeaderboardScreen(
           leaderboardOverride: AsyncValue.data(_result(entries: entries)),
-          userId: _currentUserId,
+          userId: 'nobody',
         ),
       );
       await tester.pump();
 
-      final otherTile = find.byKey(
-        const ValueKey('leaderboard_entry_other-user'),
-      );
-      expect(otherTile, findsOneWidget);
-
-      final container = tester.widget<Container>(otherTile);
-      // No highlight color for non-current-user.
-      expect(container.color, isNull);
-    });
-
-    testWidgets('current user display name is bold', (tester) async {
-      final entries = [
-        _entry(rank: 1, userId: _currentUserId, displayName: 'Alice'),
-        _entry(rank: 2, userId: 'bob-id', displayName: 'Bob'),
-      ];
-
-      await tester.pumpWidget(
-        buildLeaderboardScreen(
-          leaderboardOverride: AsyncValue.data(_result(entries: entries)),
-          userId: _currentUserId,
-        ),
-      );
-      await tester.pump();
-
-      // Find the tile widget for the current user.
-      final tiles = tester.widgetList<LeaderboardEntryTile>(
-        find.byType(LeaderboardEntryTile),
-      );
-      final currentUserTile = tiles.firstWhere(
-        (t) => t.entry.userId == _currentUserId,
-      );
-      expect(currentUserTile.isCurrentUser, isTrue);
+      expect(find.text('YOU'), findsNothing);
     });
   });
 
@@ -547,8 +528,9 @@ void main() {
       );
       await tester.pump();
 
-      // Two entries at rank 2 → two silver badges.
-      expect(find.byKey(const Key('rank_badge_2')), findsNWidgets(2));
+      // Both the 2nd and 3rd podium positions carry the same real rank (2),
+      // so both pedestal labels should read "2".
+      expect(find.byKey(const Key('podium_rank_2')), findsNWidgets(2));
     });
   });
 

@@ -244,6 +244,7 @@ class _PeriodPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      key: const Key('scope_selector'),
       margin: const EdgeInsets.fromLTRB(24, 14, 24, 0),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -378,6 +379,15 @@ class _LeaderboardBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final entries = result.entries;
+
+    if (entries.isEmpty) {
+      return ListView(
+        key: const Key('leaderboard_list'),
+        padding: const EdgeInsets.fromLTRB(22, 0, 22, 110),
+        children: const [_EmptyLeaderboardState()],
+      );
+    }
+
     final showInvite = entries.length < 3;
 
     return ListView(
@@ -394,6 +404,60 @@ class _LeaderboardBody extends StatelessWidget {
         if (entries.length > 3)
           _RestList(entries: entries, currentUserId: currentUserId),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Empty state — shown when no one has any points yet
+// ---------------------------------------------------------------------------
+
+class _EmptyLeaderboardState extends StatelessWidget {
+  const _EmptyLeaderboardState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 54),
+      child: Column(
+        children: [
+          Container(
+            width: 88,
+            height: 88,
+            decoration: const BoxDecoration(
+              color: Color(0xFFEAFAF7),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.emoji_events_outlined,
+              size: 44,
+              color: _teal,
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'No rankings yet',
+            style: TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w700,
+              color: _darkText,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Complete a chore to climb the ranks',
+            key: Key('empty_state_text'),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: _secondaryText,
+              height: 1.5,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -424,7 +488,7 @@ class _Podium extends StatelessWidget {
           p2 != null
               ? _PodiumSlot(
                   entry: p2,
-                  rank: 2,
+                  rank: p2.rank,
                   avatarSize: 56,
                   avatarFontSize: 19,
                   borderColor: const Color(0xFFCBD5E1),
@@ -458,7 +522,7 @@ class _Podium extends StatelessWidget {
           p3 != null
               ? _PodiumSlot(
                   entry: p3,
-                  rank: 3,
+                  rank: p3.rank,
                   avatarSize: 56,
                   avatarFontSize: 19,
                   borderColor: const Color(0xFFE0B48C),
@@ -511,6 +575,7 @@ class _PodiumSlotFirst extends StatelessWidget {
                 children: [
                   // Avatar
                   Container(
+                    key: const Key('podium_avatar_1'),
                     width: 68,
                     height: 68,
                     decoration: BoxDecoration(
@@ -608,6 +673,7 @@ class _PodiumSlotFirst extends StatelessWidget {
                 padding: EdgeInsets.only(top: 11),
                 child: Text(
                   '1',
+                  key: Key('podium_rank_1'),
                   style: TextStyle(
                     fontSize: 32,
                     fontWeight: FontWeight.w800,
@@ -666,6 +732,7 @@ class _PodiumSlot extends StatelessWidget {
           Column(
             children: [
               Container(
+                key: Key('podium_avatar_$rank'),
                 width: avatarSize,
                 height: avatarSize,
                 decoration: BoxDecoration(
@@ -744,6 +811,7 @@ class _PodiumSlot extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   '$rank',
+                  key: Key('podium_rank_$rank'),
                   style: TextStyle(
                     fontSize: pedestalNumSize,
                     fontWeight: FontWeight.w800,
