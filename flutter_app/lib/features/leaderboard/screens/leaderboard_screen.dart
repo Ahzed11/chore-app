@@ -988,15 +988,11 @@ class _Avatar extends StatelessWidget {
     required this.name,
     this.size = 40,
     this.fontSize = 15,
-    this.borderColor,
-    this.borderWidth = 0,
   });
 
   final String name;
   final double size;
   final double fontSize;
-  final Color? borderColor;
-  final double borderWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -1007,9 +1003,6 @@ class _Avatar extends StatelessWidget {
       decoration: BoxDecoration(
         color: _avatarColor(name),
         shape: BoxShape.circle,
-        border: borderColor != null
-            ? Border.all(color: borderColor!, width: borderWidth)
-            : null,
       ),
       child: Center(
         child: Text(
