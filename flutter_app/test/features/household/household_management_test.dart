@@ -3,7 +3,6 @@ import 'package:chore_app/features/household/models/member_model.dart';
 import 'package:chore_app/features/household/providers/household_provider.dart';
 import 'package:chore_app/features/household/providers/members_provider.dart';
 import 'package:chore_app/features/household/screens/household_management_screen.dart';
-import 'package:chore_app/features/household/widgets/member_tile.dart';
 import 'package:chore_app/features/leaderboard/providers/leaderboard_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:flutter/material.dart';
@@ -175,6 +174,20 @@ Widget _buildScreen({
   );
 }
 
+/// Pumps [widget] with an enlarged viewport so the whole scrollable content
+/// of the management screen (including the danger-zone "Leave household"
+/// button at the bottom) is laid out on screen and hit-testable without
+/// having to scroll it into view first.
+Future<void> _pumpScreen(WidgetTester tester, Widget widget) async {
+  tester.view.physicalSize = const Size(800, 1400);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+  await tester.pumpWidget(widget);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -195,12 +208,11 @@ void main() {
         _member(userId: 'u2', displayName: 'Bob', role: 'member'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(MemberTile), findsNWidgets(2));
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Bob'), findsOneWidget);
 
@@ -221,7 +233,7 @@ void main() {
         _member(userId: 'u1', displayName: 'Alice', role: 'admin'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -245,7 +257,7 @@ void main() {
         _member(userId: 'u2', displayName: 'Bob', role: 'member'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -267,7 +279,7 @@ void main() {
         _member(userId: 'u2', displayName: 'Bob', role: 'member'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -297,7 +309,7 @@ void main() {
         _member(userId: 'u1', displayName: 'Alice', role: 'admin'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(
           households: households,
           members: members,
@@ -328,28 +340,31 @@ void main() {
     });
 
     // -----------------------------------------------------------------------
-    // Edit household name dialog shows current name
+    // Edit household name — the redesign replaced the modal dialog with an
+    // inline edit field inside the hero card.
     // -----------------------------------------------------------------------
 
-    testWidgets('edit household name dialog shows current name',
+    testWidgets('editing household name shows a field pre-filled with the current name',
         (tester) async {
       final households = [_household(id: householdId, name: 'My Home')];
       final members = <MemberModel>[];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester,
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
 
-      // Tap the household name tile to open the edit dialog.
-      await tester.tap(find.byKey(const Key('household_name_tile')));
-      await tester.pumpAndSettle();
+      // Before editing, the plain name tile is shown (no dialog needed).
+      expect(find.byKey(const Key('household_name_tile')), findsOneWidget);
+      expect(find.text('My Home'), findsOneWidget);
 
-      expect(find.byKey(const Key('edit_name_dialog')), findsOneWidget);
+      // Tap the edit icon to switch the hero card into inline-edit mode.
+      await tester.tap(find.byKey(const Key('edit_name_button')));
+      await tester.pumpAndSettle();
 
       // The text field should be pre-filled with the current name.
       final textField = tester.widget<TextField>(
-        find.byKey(const Key('edit_name_field')),
+        find.byKey(const Key('household_name_field')),
       );
       expect(textField.controller?.text, 'My Home');
     });
@@ -362,7 +377,7 @@ void main() {
       final households = [_household(id: householdId)];
       final members = <MemberModel>[];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -386,7 +401,7 @@ void main() {
       final households = [_household(id: householdId)];
       final members = <MemberModel>[];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(
           households: households,
           members: members,
@@ -424,13 +439,13 @@ void main() {
       final households = [_household(id: householdId)];
       final members = <MemberModel>[];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('invite_tile')), findsOneWidget);
-      expect(find.text('Invite member'), findsOneWidget);
+      expect(find.text('Invite a housemate'), findsOneWidget);
     });
 
     // -----------------------------------------------------------------------
@@ -444,7 +459,7 @@ void main() {
         _member(userId: 'u2', displayName: 'Other', role: 'member'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(
           households: households,
           members: members,
@@ -469,7 +484,7 @@ void main() {
         _member(userId: 'u1', displayName: 'Alice', role: 'admin'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -477,8 +492,9 @@ void main() {
       final badgeFinder = find.byKey(const Key('role_badge_admin_u1'));
       expect(badgeFinder, findsOneWidget);
 
-      final chip = tester.widget<Chip>(badgeFinder);
-      final bg = chip.backgroundColor!;
+      final container = tester.widget<Container>(badgeFinder);
+      final decoration = container.decoration! as BoxDecoration;
+      final bg = decoration.color!;
       final r = (bg.r * 255.0).round().clamp(0, 255);
       final g = (bg.g * 255.0).round().clamp(0, 255);
       final b = (bg.b * 255.0).round().clamp(0, 255);
@@ -497,7 +513,7 @@ void main() {
         _member(userId: 'u2', displayName: 'Bob', role: 'member'),
       ];
 
-      await tester.pumpWidget(
+      await _pumpScreen(tester, 
         _buildScreen(households: households, members: members),
       );
       await tester.pumpAndSettle();
@@ -505,8 +521,9 @@ void main() {
       final badgeFinder = find.byKey(const Key('role_badge_member_u2'));
       expect(badgeFinder, findsOneWidget);
 
-      final chip = tester.widget<Chip>(badgeFinder);
-      final bg = chip.backgroundColor!;
+      final container = tester.widget<Container>(badgeFinder);
+      final decoration = container.decoration! as BoxDecoration;
+      final bg = decoration.color!;
       final r = (bg.r * 255.0).round().clamp(0, 255);
       final g = (bg.g * 255.0).round().clamp(0, 255);
       final b = (bg.b * 255.0).round().clamp(0, 255);

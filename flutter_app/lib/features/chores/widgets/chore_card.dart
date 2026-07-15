@@ -84,6 +84,7 @@ class ChoreCard extends StatelessWidget {
 
     if (onCompleteTap != null && !isComplete) {
       statusCircle = GestureDetector(
+        key: Key('mark_done_button_${chore.id}'),
         onTap: onCompleteTap,
         child: statusCircle,
       );
