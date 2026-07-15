@@ -55,25 +55,6 @@ class _FakeMembersNotifier extends MembersNotifier {
   Future<List<MemberModel>> build(String arg) async => _members;
 }
 
-class _FakeChoresNotifier extends ChoresNotifier {
-  Map<String, dynamic>? lastCreateBody;
-  Map<String, dynamic>? lastUpdateBody;
-
-  @override
-  Future<List<ChoreModel>> build(String arg) async => [];
-
-  @override
-  Future<void> createChore(Map<String, dynamic> body) async {
-    lastCreateBody = body;
-  }
-
-  @override
-  Future<void> updateChoreDefinition(
-      String definitionId, Map<String, dynamic> body) async {
-    lastUpdateBody = body;
-  }
-}
-
 class _LoadingChoresNotifier extends ChoresNotifier {
   @override
   Future<List<ChoreModel>> build(String arg) =>
@@ -408,7 +389,7 @@ void main() {
     // =========================================================================
 
     group('edit mode', () {
-      ChoreFormInitData _editData() => ChoreFormInitData(
+      ChoreFormInitData editData() => ChoreFormInitData(
             definitionId: 'def-42',
             title: 'Existing chore',
             description: 'Some notes',
@@ -421,7 +402,7 @@ void main() {
           );
 
       testWidgets('shows "Edit Chore" in the app bar', (tester) async {
-        await tester.pumpWidget(_buildScreen(initData: _editData()));
+        await tester.pumpWidget(_buildScreen(initData: editData()));
         await tester.pump();
 
         expect(
@@ -435,7 +416,7 @@ void main() {
 
       testWidgets('shows the edit-mode banner with correct message',
           (tester) async {
-        await tester.pumpWidget(_buildScreen(initData: _editData()));
+        await tester.pumpWidget(_buildScreen(initData: editData()));
         await tester.pump();
 
         expect(find.byKey(const Key('edit_mode_banner')), findsOneWidget);
@@ -446,7 +427,7 @@ void main() {
       });
 
       testWidgets('pre-populates the title field', (tester) async {
-        await tester.pumpWidget(_buildScreen(initData: _editData()));
+        await tester.pumpWidget(_buildScreen(initData: editData()));
         await tester.pump();
 
         expect(find.text('Existing chore'), findsOneWidget);
@@ -454,14 +435,14 @@ void main() {
 
       testWidgets('shows recurrence section when choreType is recurring',
           (tester) async {
-        await tester.pumpWidget(_buildScreen(initData: _editData()));
+        await tester.pumpWidget(_buildScreen(initData: editData()));
         await tester.pump();
 
         expect(find.byKey(const Key('recurrence_section')), findsOneWidget);
       });
 
       testWidgets('submit button label is "Save Changes"', (tester) async {
-        await tester.pumpWidget(_buildScreen(initData: _editData()));
+        await tester.pumpWidget(_buildScreen(initData: editData()));
         await tester.pump();
 
         final button = tester.widget<ElevatedButton>(

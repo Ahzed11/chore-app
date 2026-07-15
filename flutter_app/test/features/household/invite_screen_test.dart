@@ -13,8 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// A synchronous fake that returns pre-configured responses in sequence.
 /// After the last entry the cycle restarts (modulo).
 class _FakeInviteApi implements InviteApi {
-  _FakeInviteApi({required List<InviteResponse> responses})
-      : _responses = responses;
+  _FakeInviteApi({required this._responses});
 
   final List<InviteResponse> _responses;
   int _callIndex = 0;

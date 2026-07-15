@@ -314,8 +314,8 @@ class _HouseholdManagementScreenState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 11),
+        const Padding(
+          padding: EdgeInsets.only(left: 4, bottom: 11),
           child: Text(
             'INVITE',
             style: TextStyle(
@@ -933,7 +933,7 @@ class _MembersSection extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
+              const Text(
                 'MEMBERS',
                 style: TextStyle(
                   fontSize: 13,
@@ -1256,9 +1256,9 @@ void _showMemberActions(
               } on SoleAdminException {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      key: const Key('sole_admin_snackbar'),
-                      content: const Text('Cannot remove the sole admin.'),
+                    const SnackBar(
+                      key: Key('sole_admin_snackbar'),
+                      content: Text('Cannot remove the sole admin.'),
                     ),
                   );
                 }
