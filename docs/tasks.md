@@ -20,7 +20,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
 | TASK-054, TASK-055 | ✅ Done 2026-07-15 — INTERNET permission + cleartext network-security-config in the main manifest; logout ordering fixed so `POST /auth/logout` actually fires. ⚠️ TASK-055's ordering regression test is deferred to TASK-056, which introduces the Dio mock infrastructure. |
 | TASK-056 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
-| TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed; coverage gate set to measured 68% with a ratchet-up note (raising real coverage remains open — biggest gaps: `redistribution.py`, `scheduler.py`, auth logout/refresh paths). 137/137 tests pass, lint clean. |
+| TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed. Coverage gate stays at 75%: the "68%" measured earlier was a coverage.py artifact fixed by `[tool.coverage.run] concurrency = ["greenlet", "thread"]` (merged from main/PR #2) — real coverage is **95%**. 137/137 tests pass, lint clean. |
 | TASK-070 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
 
 ---

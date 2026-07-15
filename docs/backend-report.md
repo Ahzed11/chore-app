@@ -71,6 +71,7 @@ Beyond that: rate limiting (TASK-031) was never implemented, access tokens still
 **H3. [Bug] `GET /chores` pagination has no ORDER BY** — `chores.py:210-217`: `LIMIT/OFFSET` without ordering means pages can repeat/skip rows. *Fix:* `.order_by(ChoreInstance.due_date, ChoreInstance.id)`.
 
 **H4. [Operational] CI never runs on working branches; the coverage gate fails anyway** — `.github/workflows/ci.yml` triggers only on push/PR to `main`/`master`; all work happens on `claude/*` branches merged locally — which is exactly how C1 shipped. With C1 patched, coverage is **68.1% vs the 75% `--cov-fail-under`**, so the next master push fails regardless. *Fix:* trigger on `push: branches: ['**']`; raise coverage (`redistribution.py` is at 25%) or lower the gate to reality.
+> **Resolved 2026-07-15 (TASK-069):** CI now runs on all branches. The 68.1% figure was a measurement artifact — coverage.py wasn't tracing SQLAlchemy's async greenlets; with `[tool.coverage.run] concurrency = ["greenlet", "thread"]` real coverage is **95%** and the 75% gate stands.
 
 **H5. [Bug] Invalid `status_filter`/`category` query values return HTTP 500** — verified live (`GET /chores?status_filter=bogus` → 500). `chores.py:179-180` accept arbitrary strings compared against native PG enums. *Fix:* type the query params with the existing `Literal` aliases so FastAPI returns 422.
 

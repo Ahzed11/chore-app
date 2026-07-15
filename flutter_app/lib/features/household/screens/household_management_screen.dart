@@ -314,8 +314,8 @@ class _HouseholdManagementScreenState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 11),
+        const Padding(
+          padding: EdgeInsets.only(left: 4, bottom: 11),
           child: Text(
             'INVITE',
             style: TextStyle(
@@ -738,6 +738,7 @@ class _HeroCard extends StatelessWidget {
               const SizedBox(width: 8),
               if (!isEditingName)
                 GestureDetector(
+                  key: const Key('edit_name_button'),
                   onTap: onStartEdit,
                   child: Container(
                     width: 38,
@@ -933,7 +934,7 @@ class _MembersSection extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
+              const Text(
                 'MEMBERS',
                 style: TextStyle(
                   fontSize: 13,
@@ -1071,6 +1072,7 @@ class _MemberRow extends ConsumerWidget {
           ),
           if (canManage)
             GestureDetector(
+              key: Key('member_menu_${member.userId}'),
               onTap: () =>
                   _showMemberActions(context, ref, member, householdId),
               child: Container(
@@ -1256,9 +1258,9 @@ void _showMemberActions(
               } on SoleAdminException {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      key: const Key('sole_admin_snackbar'),
-                      content: const Text('Cannot remove the sole admin.'),
+                    const SnackBar(
+                      key: Key('sole_admin_snackbar'),
+                      content: Text('Cannot remove the sole admin.'),
                     ),
                   );
                 }

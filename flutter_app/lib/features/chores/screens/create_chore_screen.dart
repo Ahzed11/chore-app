@@ -369,7 +369,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
             // -----------------------------------------------------------------
             DropdownButtonFormField<String>(
               key: const Key('category_dropdown'),
-              value: _category,
+              initialValue: _category,
               decoration: const InputDecoration(labelText: 'Category *'),
               items: _kCategoryLabels.entries.map((entry) {
                 return DropdownMenuItem<String>(
@@ -392,7 +392,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
             // -----------------------------------------------------------------
             // Effort level
             // -----------------------------------------------------------------
-            _SectionLabel(label: 'Effort Level'),
+            const _SectionLabel(label: 'Effort Level'),
             const SizedBox(height: 10),
             _EffortLevelSelector(
               key: const Key('effort_level_selector'),
@@ -404,25 +404,29 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
             // -----------------------------------------------------------------
             // Chore type
             // -----------------------------------------------------------------
-            _SectionLabel(label: 'Chore Type'),
+            const _SectionLabel(label: 'Chore Type'),
             const SizedBox(height: 4),
-            RadioListTile<String>(
-              key: const Key('type_one_off'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('One-off'),
-              subtitle: const Text('Happens only once'),
-              value: 'one_off',
+            RadioGroup<String>(
               groupValue: _choreType,
               onChanged: (v) => setState(() => _choreType = v!),
-            ),
-            RadioListTile<String>(
-              key: const Key('type_recurring'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Recurring'),
-              subtitle: const Text('Repeats on a schedule'),
-              value: 'recurring',
-              groupValue: _choreType,
-              onChanged: (v) => setState(() => _choreType = v!),
+              child: const Column(
+                children: [
+                  RadioListTile<String>(
+                    key: Key('type_one_off'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('One-off'),
+                    subtitle: Text('Happens only once'),
+                    value: 'one_off',
+                  ),
+                  RadioListTile<String>(
+                    key: Key('type_recurring'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Recurring'),
+                    subtitle: Text('Repeats on a schedule'),
+                    value: 'recurring',
+                  ),
+                ],
+              ),
             ),
 
             // -----------------------------------------------------------------
@@ -474,7 +478,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
               error: (_, __) => const SizedBox.shrink(),
               data: (members) => DropdownButtonFormField<String?>(
                 key: const Key('assignee_dropdown'),
-                value: _assigneeId,
+                initialValue: _assigneeId,
                 decoration: const InputDecoration(
                   labelText: 'Assignee (optional)',
                   hintText: 'Auto-assign',
@@ -686,7 +690,7 @@ class _RecurrenceSection extends StatelessWidget {
                   flex: 3,
                   child: DropdownButtonFormField<String>(
                     key: const Key('interval_unit_dropdown'),
-                    value: intervalUnit,
+                    initialValue: intervalUnit,
                     decoration: const InputDecoration(labelText: 'Unit'),
                     items: _kIntervalUnitLabels.entries.map((entry) {
                       return DropdownMenuItem<String>(

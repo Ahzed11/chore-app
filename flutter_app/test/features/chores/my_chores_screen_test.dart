@@ -4,6 +4,10 @@ import 'package:chore_app/features/auth/providers/current_user_provider.dart';
 import 'package:chore_app/features/chores/models/chore_model.dart';
 import 'package:chore_app/features/chores/providers/chores_provider.dart';
 import 'package:chore_app/features/chores/screens/my_chores_screen.dart';
+import 'package:chore_app/features/household/models/household_model.dart';
+import 'package:chore_app/features/household/providers/household_provider.dart';
+import 'package:chore_app/features/leaderboard/models/leaderboard_model.dart';
+import 'package:chore_app/features/leaderboard/providers/leaderboard_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:chore_app/shared/widgets/loading_widget.dart';
 import 'package:flutter/material.dart';
@@ -89,6 +93,17 @@ class _TrackingChoresNotifier extends _FakeChoresNotifier {
   }
 }
 
+/// Avoids real Dio network calls from providers that [MyChoresScreen]
+/// watches but that these tests don't otherwise care about
+/// (`householdsNotifierProvider` for the admin check, and
+/// `weeklyLeaderboardProvider` for the points-banner rank pill). Without
+/// these overrides the requests never resolve and leave pending timers at
+/// test teardown.
+class _FakeHouseholdsNotifier extends HouseholdsNotifier {
+  @override
+  Future<List<HouseholdModel>> build() async => const [];
+}
+
 // ---------------------------------------------------------------------------
 // Widget builder helper
 // ---------------------------------------------------------------------------
@@ -106,6 +121,13 @@ Widget _buildScreen({
       currentUserProvider.overrideWith(
         (ref) async =>
             UserProfile(id: currentUserId, displayName: 'Test User'),
+      ),
+      householdsNotifierProvider.overrideWith(_FakeHouseholdsNotifier.new),
+      weeklyLeaderboardProvider(_kHouseholdId).overrideWith(
+        (ref) async => const LeaderboardResult(
+          scope: LeaderboardScope.thisWeek,
+          entries: [],
+        ),
       ),
     ],
     child: MaterialApp(
@@ -135,7 +157,7 @@ void main() {
       await tester.pump(); // single frame — provider still loading
 
       expect(find.byType(LoadingWidget), findsOneWidget);
-      expect(find.text('Loading your chores...'), findsOneWidget);
+      expect(find.text('Loading your chores…'), findsOneWidget);
     });
   });
 
@@ -166,19 +188,21 @@ void main() {
     testWidgets('sums pointsAwarded from complete chores only', (tester) async {
       final now = DateTime.now();
       final chores = [
+        // Completed "just now" so it always falls within the current week,
+        // regardless of which day of the week the suite happens to run on.
         _chore(
           id: 'c1',
           status: 'complete',
           pointsAwarded: 25,
           dueDate: now.subtract(const Duration(days: 5)),
-          completedAt: now.subtract(const Duration(days: 3)),
+          completedAt: now,
         ),
         _chore(
           id: 'c2',
           status: 'complete',
           pointsAwarded: 10,
           dueDate: now.subtract(const Duration(days: 4)),
-          completedAt: now.subtract(const Duration(days: 2)),
+          completedAt: now,
         ),
         // pending chore — should NOT be counted
         _chore(id: 'c3', status: 'pending'),
@@ -202,7 +226,7 @@ void main() {
           assigneeId: _kCurrentUserId,
           pointsAwarded: 50,
           dueDate: now.subtract(const Duration(days: 3)),
-          completedAt: now.subtract(const Duration(days: 1)),
+          completedAt: now,
         ),
         // Other user: should NOT be counted
         _chore(
@@ -211,7 +235,7 @@ void main() {
           assigneeId: _kOtherUserId,
           pointsAwarded: 100,
           dueDate: now.subtract(const Duration(days: 3)),
-          completedAt: now.subtract(const Duration(days: 1)),
+          completedAt: now,
         ),
       ];
 
@@ -266,20 +290,25 @@ void main() {
       await tester.pumpWidget(_buildScreen(chores: chores));
       await tester.pump();
 
+      // Both "To Do" cards (overdue + pending) are visible by default; switch
+      // to the "Done" tab afterwards to confirm the complete chore's position
+      // relative to the others isn't asserted (the "todo" list only shows
+      // overdue/pending, in line with the redesigned To Do / Done tabs).
       final overdueY = tester
           .getTopLeft(find.byKey(const Key('my_chore_card_c_overdue')))
           .dy;
       final pendingY = tester
           .getTopLeft(find.byKey(const Key('my_chore_card_c_pending')))
           .dy;
-      final completeY = tester
-          .getTopLeft(find.byKey(const Key('my_chore_card_c_complete')))
-          .dy;
 
       expect(overdueY, lessThan(pendingY),
           reason: 'Overdue must appear above pending');
-      expect(pendingY, lessThan(completeY),
-          reason: 'Pending must appear above complete');
+
+      // The complete chore lives under the "Done" tab, not "To Do".
+      expect(find.byKey(const Key('my_chore_card_c_complete')), findsNothing);
+      await tester.tap(find.text('Done'));
+      await tester.pump();
+      expect(find.byKey(const Key('my_chore_card_c_complete')), findsOneWidget);
     });
 
     testWidgets('sorts two overdue chores by dueDate ASC', (tester) async {
@@ -411,6 +440,10 @@ void main() {
       await tester.pumpWidget(_buildScreen(chores: chores));
       await tester.pump();
 
+      // The complete chore only shows up under the "Done" tab.
+      await tester.tap(find.text('Done'));
+      await tester.pump();
+
       expect(find.byKey(const Key('mark_done_button_c1')), findsNothing);
     });
 
@@ -448,23 +481,29 @@ void main() {
       await tester.pumpWidget(_buildScreen(chores: chores));
       await tester.pump();
 
+      // "To Do" tab (default): pending + overdue show the button.
       expect(find.byKey(const Key('mark_done_button_c_pending')), findsOneWidget);
       expect(find.byKey(const Key('mark_done_button_c_overdue')), findsOneWidget);
+
+      // "Done" tab: the complete chore never shows the button.
+      await tester.tap(find.text('Done'));
+      await tester.pump();
       expect(find.byKey(const Key('mark_done_button_c_complete')), findsNothing);
     });
   });
 
   // -------------------------------------------------------------------------
-  // Completion info for complete chores
+  // Complete chores under the "Done" tab
   // -------------------------------------------------------------------------
 
   group('MyChoresScreen – completion info', () {
-    testWidgets('shows completion date and points for a complete chore',
+    testWidgets('a complete chore shows a "Done" pill and its points',
         (tester) async {
       final chores = [
         _chore(
           id: 'c1',
           status: 'complete',
+          effortLevel: 'medium', // 25 pts
           dueDate: DateTime(2026, 6, 20),
           completedAt: DateTime(2026, 6, 25),
           pointsAwarded: 25,
@@ -474,11 +513,13 @@ void main() {
       await tester.pumpWidget(_buildScreen(chores: chores));
       await tester.pump();
 
-      final infoKey = find.byKey(const Key('completion_info_c1'));
-      expect(infoKey, findsOneWidget);
-      final text = tester.widget<Text>(infoKey).data ?? '';
-      expect(text, contains('Jun 25'));
-      expect(text, contains('25 pts'));
+      // Switch to the "Done" tab to see completed chores.
+      await tester.tap(find.text('Done'));
+      await tester.pump();
+
+      expect(find.byKey(const Key('my_chore_card_c1')), findsOneWidget);
+      expect(find.text('Done'), findsWidgets);
+      expect(find.text('25'), findsOneWidget);
     });
   });
 
@@ -499,11 +540,11 @@ void main() {
       await tester.pump();
 
       expect(
-        find.byKey(const Key('empty_state_my_chores')),
+        find.byKey(const Key('todo_empty_state')),
         findsOneWidget,
       );
       expect(
-        find.text('No chores assigned to you yet.'),
+        find.text('All caught up! 🎉'),
         findsOneWidget,
       );
     });
@@ -514,7 +555,7 @@ void main() {
       await tester.pump();
 
       expect(
-        find.text('No chores assigned to you yet.'),
+        find.text('All caught up! 🎉'),
         findsOneWidget,
       );
     });

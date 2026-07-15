@@ -31,10 +31,14 @@ test = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# Coverage gate: set to measured reality (68% as of 2026-07-15). Ratchet this
-# up as tests are added — never down. Biggest gaps: app/services/redistribution.py,
-# app/tasks/scheduler.py, logout/refresh paths in app/api/auth.py (see TASK-069).
-addopts = "--cov=app --cov-fail-under=68"
+addopts = "--cov=app --cov-fail-under=75"
+
+[tool.coverage.run]
+# SQLAlchemy's async engine executes query compilation/execution inside a
+# greenlet via greenlet_spawn(); without this, coverage.py's tracer is not
+# reattached after crossing into that greenlet, so most statements in async
+# DB-touching functions are (mis)reported as uncovered even when exercised.
+concurrency = ["greenlet", "thread"]
 
 [tool.ruff]
 target-version = "py312"
