@@ -29,8 +29,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Warnings and errors are fatal; info-level lints are reported but do
+      # not fail the build (pre-existing deprecation infos from newer stable
+      # SDKs are tracked in docs/tasks.md TASK-067).
       - name: Analyse
-        run: flutter analyze --no-pub
+        run: flutter analyze --no-pub --no-fatal-infos
 
       - name: Run tests
         run: flutter test --no-pub

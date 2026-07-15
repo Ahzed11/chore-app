@@ -55,25 +55,6 @@ class _FakeMembersNotifier extends MembersNotifier {
   Future<List<MemberModel>> build(String arg) async => _members;
 }
 
-class _FakeChoresNotifier extends ChoresNotifier {
-  Map<String, dynamic>? lastCreateBody;
-  Map<String, dynamic>? lastUpdateBody;
-
-  @override
-  Future<List<ChoreModel>> build(String arg) async => [];
-
-  @override
-  Future<void> createChore(Map<String, dynamic> body) async {
-    lastCreateBody = body;
-  }
-
-  @override
-  Future<void> updateChoreDefinition(
-      String definitionId, Map<String, dynamic> body) async {
-    lastUpdateBody = body;
-  }
-}
-
 class _LoadingChoresNotifier extends ChoresNotifier {
   @override
   Future<List<ChoreModel>> build(String arg) =>
