@@ -280,7 +280,7 @@ async def test_flow2_recurring_chore_scheduler(
         headers=_auth(alice_token),
     )
     assert chores_resp.status_code == 200
-    instances = chores_resp.json()
+    instances = chores_resp.json()["items"]
     assert len(instances) >= 1, "Expected at least one chore instance after scheduler run"
     due_dates = {inst["due_date"] for inst in instances}
     assert str(today) in due_dates, (
