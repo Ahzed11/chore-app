@@ -26,11 +26,28 @@ class _FakeInviteApi implements InviteApi {
     _callIndex++;
     return response;
   }
+
+  @override
+  Future<List<InviteTokenSummary>> listInvites(String householdId) async =>
+      const [];
+
+  @override
+  Future<void> revokeInvite(String householdId, String inviteId) async {}
 }
 
 class _ThrowingInviteApi implements InviteApi {
   @override
   Future<InviteResponse> generateInvite(String householdId) async {
+    throw Exception('Network error');
+  }
+
+  @override
+  Future<List<InviteTokenSummary>> listInvites(String householdId) async {
+    throw Exception('Network error');
+  }
+
+  @override
+  Future<void> revokeInvite(String householdId, String inviteId) async {
     throw Exception('Network error');
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../household/models/member_model.dart';
 import '../models/chore_model.dart';
 
 const _teal = Color(0xFF0D9488);
@@ -41,6 +42,8 @@ class ChoreCard extends StatelessWidget {
     this.onDeleteSeries,
     this.showAssignee = true,
     this.onCompleteTap,
+    this.members = const [],
+    this.onReassign,
   });
 
   final ChoreModel chore;
@@ -52,6 +55,15 @@ class ChoreCard extends StatelessWidget {
 
   /// If non-null and the chore is not complete, the status circle becomes tappable.
   final VoidCallback? onCompleteTap;
+
+  /// Household members available to reassign this chore to. Passed down from
+  /// the parent screen (`membersNotifierProvider`) rather than fetched here.
+  final List<MemberModel> members;
+
+  /// Called with the selected member's `userId` when the admin picks a new
+  /// assignee from the reassign sheet. When null the "Reassign chore" action
+  /// is hidden.
+  final ValueChanged<String>? onReassign;
 
   @override
   Widget build(BuildContext context) {
@@ -214,6 +226,9 @@ class ChoreCard extends StatelessWidget {
   // ---------------------------------------------------------------------------
 
   void _showAdminMenu(BuildContext context) {
+    final canReassign = onReassign != null &&
+        (chore.status == 'pending' || chore.status == 'overdue');
+
     showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -233,6 +248,19 @@ class ChoreCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
+            if (canReassign)
+              ListTile(
+                key: const Key('reassign_chore_menu_item'),
+                leading: const Icon(Icons.swap_horiz_rounded, color: _teal),
+                title: const Text(
+                  'Reassign chore',
+                  style: TextStyle(color: _teal),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showMemberPicker(context);
+                },
+              ),
             ListTile(
               key: const Key('delete_series_menu_item'),
               leading: const Icon(Icons.delete_outline, color: Colors.red),
@@ -245,6 +273,85 @@ class ChoreCard extends StatelessWidget {
                 onDeleteSeries?.call();
               },
             ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reassign member picker
+  // ---------------------------------------------------------------------------
+
+  void _showMemberPicker(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Reassign to',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0F2E2C),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (members.isEmpty)
+              const Padding(
+                key: Key('no_members_to_reassign'),
+                padding: EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+                child: Text(
+                  'No household members available.',
+                  style: TextStyle(color: Color(0xFF8AA19E)),
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: members.length,
+                  itemBuilder: (context, index) {
+                    final member = members[index];
+                    final isCurrent = member.userId == chore.assigneeId;
+                    return ListTile(
+                      key: Key('reassign_member_${member.userId}'),
+                      leading: _MiniAvatar(name: member.displayName),
+                      title: Text(member.displayName),
+                      trailing: isCurrent
+                          ? const Icon(Icons.check_rounded, color: _teal)
+                          : null,
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        onReassign?.call(member.userId);
+                      },
+                    );
+                  },
+                ),
+              ),
             const SizedBox(height: 8),
           ],
         ),

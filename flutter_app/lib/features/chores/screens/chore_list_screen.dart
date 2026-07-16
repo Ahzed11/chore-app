@@ -111,6 +111,45 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Reassign
+  // ---------------------------------------------------------------------------
+
+  Future<void> _reassignChore(ChoreModel chore, String memberId) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(choresNotifierProvider(widget.householdId).notifier)
+          .reassignChore(chore.id, memberId);
+      if (!mounted) return;
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(
+          content: Text('Chore reassigned.'),
+          backgroundColor: _teal,
+        ),
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final code = e.response?.statusCode;
+      scaffoldMessenger.showSnackBar(SnackBar(
+        content: Text(code == 409
+            ? 'This chore can no longer be reassigned.'
+            : code == 403
+                ? 'You do not have permission to reassign chores.'
+                : code == 422
+                    ? 'That member is no longer part of this household.'
+                    : 'Failed to reassign chore. Please try again.'),
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(
+          content: Text('Failed to reassign chore. Please try again.'),
+        ),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Complete confirmation
   // ---------------------------------------------------------------------------
 
@@ -255,12 +294,17 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                                   key: Key('chore_card_${chore.id}'),
                                   chore: chore,
                                   isAdmin: isAdmin,
+                                  members: members,
                                   onDeleteSeries: isAdmin
                                       ? () => _confirmDelete(
                                             context,
                                             chore.definitionId,
                                             chore.title,
                                           )
+                                      : null,
+                                  onReassign: isAdmin
+                                      ? (memberId) =>
+                                          _reassignChore(chore, memberId)
                                       : null,
                                   onCompleteTap: isMyChore &&
                                           chore.status != 'complete'
