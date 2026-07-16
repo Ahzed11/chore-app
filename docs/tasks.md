@@ -19,7 +19,8 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects — see TASK-054+ (notably: TASK-047's logout call is defeated by a caller bug; TASK-050 missed the refresh Dio; TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ❌ **Open — not implemented** (reassignment UI, invite management UI) |
 | TASK-054, TASK-055 | ✅ Done 2026-07-15 — INTERNET permission + cleartext network-security-config in the main manifest; logout ordering fixed so `POST /auth/logout` actually fires. ⚠️ TASK-055's ordering regression test is deferred to TASK-056, which introduces the Dio mock infrastructure. |
-| TASK-056 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
+| TASK-056 | ✅ Done 2026-07-15 — refresh interceptor hardened (retry marker, /auth/ exclusion, shared-future queueing for concurrent 401s, network-vs-401 distinction, timeouts on the auth Dio, ApiEndpoints constants) + 7 mocked-adapter tests. Also covers TASK-055's deferred test debt. |
+| TASK-057 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
 | TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed. Coverage gate stays at 75%: the "68%" measured earlier was a coverage.py artifact fixed by `[tool.coverage.run] concurrency = ["greenlet", "thread"]` (merged from main/PR #2) — real coverage is **95%**. 137/137 tests pass, lint clean. |
 | TASK-070 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
 
