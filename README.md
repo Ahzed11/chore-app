@@ -241,8 +241,8 @@ flutter test --no-pub
 ## More documentation
 
 - `docs/requirements.md` — product requirements.
-- `docs/backend-report.md` / `docs/frontend-report.md` — architecture and
-  code-quality reports.
 - `docs/tasks.md` — the project's task backlog (including known
   limitations referenced above, e.g. TASK-057 for in-app server URL
-  configuration).
+  configuration); completed task bodies live in `docs/archive/tasks-completed.md`.
+- `docs/archive/backend-report-2026-07-15.md` / `docs/archive/frontend-report-2026-07-15.md`
+  — the architecture and code-quality reports that produced the current task backlog.
