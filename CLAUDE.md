@@ -29,7 +29,7 @@ ready-made `db` service, or point at your own).
 cd backend && uv sync --extra test
 export DATABASE_URL=postgresql+asyncpg://choreapp:choreapp_test@localhost:5432/choreapp_test
 export TEST_DATABASE_URL=$DATABASE_URL JWT_SECRET=local_dev_secret_at_least_32_chars_long
-export JWT_ALGORITHM=HS256 JWT_EXPIRY_DAYS=7 APP_BASE_URL=http://localhost:8000
+export JWT_ALGORITHM=HS256 APP_BASE_URL=http://localhost:8000
 uv run pytest tests/ -v
 uv run ruff check .
 ```
