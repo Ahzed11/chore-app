@@ -185,6 +185,21 @@ class ChoresNotifier
     await future;
   }
 
+  /// Reassigns a chore instance to [assigneeId]. Admin only.
+  ///
+  /// Refreshes the chore list from the server on success so the card reflects
+  /// the new assignee name.
+  Future<void> reassignChore(String instanceId, String assigneeId) async {
+    final householdId = arg;
+    final dio = ref.read(dioProvider);
+    await dio.patch<Map<String, dynamic>>(
+      ApiEndpoints.choreAssignee(householdId, instanceId),
+      data: {'assignee_id': assigneeId},
+    );
+    ref.invalidateSelf();
+    await future;
+  }
+
   /// Forces a fresh fetch from the server.
   Future<void> refresh() async {
     ref.invalidateSelf();
