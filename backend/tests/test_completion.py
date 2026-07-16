@@ -10,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.deps import get_current_user, require_household_member
-from app.db.base import Base
 from app.db.session import get_db
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
@@ -20,6 +19,7 @@ from app.models.point_ledger import PointLedger
 from app.models.user import User
 from main import app
 from tests.conftest import get_test_database_url as _get_test_database_url
+from tests.conftest import truncate_all_tables as _truncate_all_tables
 
 
 def _get_session_factory() -> async_sessionmaker:
@@ -89,7 +89,7 @@ def _override_require_member_non_assignee() -> HouseholdMembership:
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture()
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
+async def async_client(_database_schema: None) -> AsyncGenerator[AsyncClient, None]:
     """AsyncClient backed by a clean test database.
 
     Default auth: the assignee user.  Individual tests can swap overrides as
@@ -101,9 +101,7 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
         bind=engine, class_=AsyncSession, expire_on_commit=False
     )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await _truncate_all_tables(engine)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:

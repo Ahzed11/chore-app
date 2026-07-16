@@ -121,11 +121,14 @@ async def redistribute_chores_for_removed_member(
     # Step 5 — adjust rotation_pointer for the removed member's position
     #
     # If the removed member's index in the original list was strictly less
-    # than the original pointer, decrement the current pointer by 1 so that
-    # the "next" member to be assigned is the same one as it would have been
-    # without the removal.
+    # than the original pointer's *effective position* (the pointer is stored
+    # unbounded, so it must be reduced modulo the original member count —
+    # including the removed member — before comparing), decrement the current
+    # pointer by 1 so that the "next" member to be assigned is the same one as
+    # it would have been without the removal.
     # ------------------------------------------------------------------
     if household is not None and removed_index is not None:
-        if removed_index < original_pointer:
+        original_member_count = remaining_count + 1  # includes the removed member
+        if removed_index < original_pointer % original_member_count:
             household.rotation_pointer = max(0, household.rotation_pointer - 1)
     # Caller commits the session.
