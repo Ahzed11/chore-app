@@ -312,6 +312,57 @@ async def test_this_week_boundary_conditions(async_client: AsyncClient) -> None:
     assert entries[0]["points"] == 25  # both boundary entries counted
 
 
+@pytest.mark.asyncio
+async def test_this_week_final_second_fraction_included(async_client: AsyncClient) -> None:
+    """An entry at 23:59:59.5 on Sunday is inside the week (TASK-079).
+
+    The window upper bound is exclusive (< next Monday 00:00), so sub-second
+    timestamps in the final second still count; the first instant of the next
+    week does not.
+    """
+    sf = _get_session_factory()
+    hh_id = await _seed_household_with_members(sf, [_USER_A_ID], ["Alice"])
+
+    frozen_today = date(2026, 6, 26)  # Friday; week: Mon 22 – Sun 28
+    last_half_second = datetime(2026, 6, 28, 23, 59, 59, 500000, tzinfo=timezone.utc)
+    next_monday = datetime(2026, 6, 29, 0, 0, 0, tzinfo=timezone.utc)
+
+    await _add_ledger_entry(sf, hh_id, _USER_A_ID, 10, last_half_second)  # counted
+    await _add_ledger_entry(sf, hh_id, _USER_A_ID, 99, next_monday)       # NOT counted
+
+    with patch("app.api.leaderboard._get_today", return_value=frozen_today):
+        response = await async_client.get(
+            f"/households/{hh_id}/leaderboard?scope=this_week"
+        )
+
+    assert response.status_code == 200, response.text
+    entries = response.json()["entries"]
+    assert entries[0]["points"] == 10
+
+
+@pytest.mark.asyncio
+async def test_this_month_final_second_fraction_included(async_client: AsyncClient) -> None:
+    """An entry at 23:59:59.5 on the month's last day is inside the month (TASK-079)."""
+    sf = _get_session_factory()
+    hh_id = await _seed_household_with_members(sf, [_USER_A_ID], ["Alice"])
+
+    frozen_today = date(2026, 6, 15)  # June 2026; month ends 2026-06-30
+    last_half_second = datetime(2026, 6, 30, 23, 59, 59, 500000, tzinfo=timezone.utc)
+    july_first = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    await _add_ledger_entry(sf, hh_id, _USER_A_ID, 15, last_half_second)  # counted
+    await _add_ledger_entry(sf, hh_id, _USER_A_ID, 99, july_first)        # NOT counted
+
+    with patch("app.api.leaderboard._get_today", return_value=frozen_today):
+        response = await async_client.get(
+            f"/households/{hh_id}/leaderboard?scope=this_month"
+        )
+
+    assert response.status_code == 200, response.text
+    entries = response.json()["entries"]
+    assert entries[0]["points"] == 15
+
+
 # ---------------------------------------------------------------------------
 # Tests: scope=this_month
 # ---------------------------------------------------------------------------
