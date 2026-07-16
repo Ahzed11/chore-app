@@ -815,6 +815,34 @@ All write endpoints on the same router already use the correct dependency. This 
 - [ ] No test sends `unit` or `interval` as recurrence rule keys.
 
 ---
+## TASK-031: Backend — Add Rate Limiting on Auth Endpoints
+
+**Domain**: Backend  
+**Priority**: High  
+**Depends on**: TASK-004  
+**Source**: `docs/archive/backend-report-2026-07-15.md` SEC-004
+
+`POST /auth/login` and `POST /auth/register` are open to unlimited requests, enabling brute-force and credential-stuffing attacks. bcrypt's cost factor slows individual attempts but does not substitute for per-IP rate limits.
+
+**Steps**:
+1. Add `slowapi` to `pyproject.toml` dependencies.
+2. Initialise a `Limiter` keyed on `get_remote_address` in `main.py` and attach it to `app.state`.
+3. Add the `SlowAPIMiddleware` to the app.
+4. Apply a limit of `5/minute` to `POST /auth/login` per IP.
+5. Apply a limit of `10/hour` to `POST /auth/register` per IP.
+6. Return HTTP 429 with a `Retry-After` header when the limit is exceeded.
+7. Add a test that verifies the 429 response is returned after the limit threshold.
+
+**Acceptance criteria**:
+- [ ] More than 5 login attempts per minute from the same IP returns HTTP 429.
+- [ ] More than 10 register attempts per hour from the same IP returns HTTP 429.
+- [ ] Requests below the limit continue to work correctly.
+- [ ] `Retry-After` header is present on 429 responses.
+
+---
+
+---
+
 ## TASK-032: Backend — Harden Dockerfile
 
 **Domain**: DevOps  

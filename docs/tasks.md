@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-Completed task bodies (TASK-001–056, 068–080 — 68 tasks) have been moved to
+Completed task bodies (TASK-001–056, 068–080 — 69 tasks) have been moved to
 `docs/archive/tasks-completed.md` to keep this file scannable. Only open work is
 detailed below; the ledger covers the full history.
 
@@ -20,7 +20,7 @@ detailed below; the ledger covers the full history.
 |---|---|
 | TASK-001 … TASK-027 | ✅ Done (initial MVP build-out) — archived |
 | TASK-028 … TASK-030 | ✅ Done (credential purge, IDOR fix, recurrence keys) — archived |
-| TASK-031 | ❌ **Open — never implemented.** No rate limiting exists in the codebase (no `slowapi`, no limiter middleware). Still required before internet exposure. |
+| TASK-031 | ✅ Done 2026-07-16 — slowapi rate limiting on `/auth/login` (5/min), `/auth/register` (10/h), `/auth/refresh` (30/min) per client IP; 429 + `Retry-After`; configurable via `RATE_LIMIT_*` settings; disabled suite-wide in tests with dedicated enable-and-assert tests. |
 | TASK-032 … TASK-044 | ✅ Done (Dockerfile hardening, logout/revocation, enum validation, health probe, fixtures, headers/CORS, refresh endpoint, reassignment+pagination, invite mgmt, N+1, deps, scheduler UTC/lock) — archived. ⚠️ TASK-042's login regression was fixed by TASK-068 (archived). |
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects fixed by TASK-054+ — archived (TASK-047's logout call was defeated by a caller bug, TASK-050 missed the refresh Dio, TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ✅ Done 2026-07-16 — admin chore reassignment UI (member-picker sheet, pending/overdue only) and invite management (list active invites with expiry, revoke, admin-gated) — archived. |
@@ -35,31 +35,6 @@ detailed below; the ledger covers the full history.
 
 ---
 
-## TASK-031: Backend — Add Rate Limiting on Auth Endpoints
-
-**Domain**: Backend  
-**Priority**: High  
-**Depends on**: TASK-004  
-**Source**: `docs/archive/backend-report-2026-07-15.md` SEC-004
-
-`POST /auth/login` and `POST /auth/register` are open to unlimited requests, enabling brute-force and credential-stuffing attacks. bcrypt's cost factor slows individual attempts but does not substitute for per-IP rate limits.
-
-**Steps**:
-1. Add `slowapi` to `pyproject.toml` dependencies.
-2. Initialise a `Limiter` keyed on `get_remote_address` in `main.py` and attach it to `app.state`.
-3. Add the `SlowAPIMiddleware` to the app.
-4. Apply a limit of `5/minute` to `POST /auth/login` per IP.
-5. Apply a limit of `10/hour` to `POST /auth/register` per IP.
-6. Return HTTP 429 with a `Retry-After` header when the limit is exceeded.
-7. Add a test that verifies the 429 response is returned after the limit threshold.
-
-**Acceptance criteria**:
-- [ ] More than 5 login attempts per minute from the same IP returns HTTP 429.
-- [ ] More than 10 register attempts per hour from the same IP returns HTTP 429.
-- [ ] Requests below the limit continue to work correctly.
-- [ ] `Retry-After` header is present on 429 responses.
-
----
 ## TASK-057: Flutter — Runtime Server URL Configuration
 
 **Domain**: Flutter  
