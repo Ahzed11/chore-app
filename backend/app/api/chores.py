@@ -269,7 +269,6 @@ async def get_chore_instance(
 # POST /households/{household_id}/chores/{instance_id}/complete  — assignee only
 # ---------------------------------------------------------------------------
 
-_COMPLETABLE_STATUSES = {"pending", "overdue"}
 _TERMINAL_STATUSES = {"complete", "cancelled"}
 
 
@@ -490,13 +489,10 @@ async def update_chore_definition(
             detail="Chore definition not found",
         )
 
-    # Apply only provided fields
+    # Apply only provided fields.  model_dump() already converts any nested
+    # RecurrenceRule model to a plain dict suitable for JSONB storage.
     update_data = body.model_dump(exclude_unset=True)
     for field, value in update_data.items():
-        if field == "recurrence_rule" and value is not None:
-            # RecurrenceRule object → dict for JSONB storage
-            if hasattr(value, "model_dump"):
-                value = value.model_dump()
         setattr(definition, field, value)
 
     await db.flush()

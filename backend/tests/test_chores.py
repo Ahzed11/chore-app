@@ -10,13 +10,13 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.deps import get_current_user, require_admin, require_household_member
-from app.db.base import Base
 from app.db.session import get_db
 from app.models.household import Household
 from app.models.household_membership import HouseholdMembership
 from app.models.user import User
 from main import app
 from tests.conftest import get_test_database_url as _get_test_database_url
+from tests.conftest import truncate_all_tables as _truncate_all_tables
 
 # ---------------------------------------------------------------------------
 # Fake users for dependency override
@@ -78,7 +78,7 @@ def override_get_current_user_member() -> User:
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture()
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
+async def async_client(_database_schema: None) -> AsyncGenerator[AsyncClient, None]:
     """AsyncClient backed by a clean test database.
 
     Provides admin auth overrides by default.
@@ -93,9 +93,7 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
         expire_on_commit=False,
     )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await _truncate_all_tables(engine)
 
     # Seed the fake admin so created_by_id FK references are valid.
     # Use a fresh ORM instance — the module-level fake_admin object must not be

@@ -11,7 +11,7 @@ Covers:
 - combined workflow: generate then flag produces expected status transitions
 """
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -465,3 +465,141 @@ async def test_cleanup_removes_only_expired_token_rows(db_session: AsyncSession)
 
     assert remaining_jtis == {active_jti}
     assert remaining_hashes == {"a" * 64}
+
+
+# ---------------------------------------------------------------------------
+# TASK-073: backfill cap and batch assignment
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_capped_at_grace_days(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daily definition whose first_due_date is 30 days old generates only
+    instances from today - GRACE_DAYS (default 3) onward — no overdue flood."""
+    fake_today = date(2024, 1, 1)
+    old_first_due = fake_today - timedelta(days=30)  # 2023-12-02
+
+    _, user_id, definition = await _seed_recurring_setup(
+        db_session,
+        first_due_date=old_first_due,
+        recurrence_rule={"interval_unit": "days", "interval_n": 1},
+    )
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: fake_today)
+
+    await generate_chore_instances(db_session)
+
+    result = await db_session.execute(
+        select(ChoreInstance)
+        .where(ChoreInstance.definition_id == definition.id)
+        .order_by(ChoreInstance.due_date)
+    )
+    instances = result.scalars().all()
+
+    # [today - 3, today + 7] inclusive → 11 daily instances, not 38.
+    assert len(instances) == 11
+    assert instances[0].due_date == fake_today - timedelta(days=3)
+    assert instances[-1].due_date == fake_today + timedelta(days=7)
+    assert all(inst.assignee_id == user_id for inst in instances)
+
+
+async def test_backfill_cap_preserves_recurrence_phase(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Capping must not shift the cadence: a weekly chore first due 30 days ago
+    keeps its original weekly phase (first_due + k*7), it does not restart at
+    the cap boundary."""
+    fake_today = date(2024, 1, 1)
+    old_first_due = fake_today - timedelta(days=30)  # 2023-12-02, weekly
+
+    _, _, definition = await _seed_recurring_setup(
+        db_session,
+        first_due_date=old_first_due,
+        recurrence_rule={"interval_unit": "weeks", "interval_n": 1},
+    )
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: fake_today)
+
+    await generate_chore_instances(db_session)
+
+    result = await db_session.execute(
+        select(ChoreInstance)
+        .where(ChoreInstance.definition_id == definition.id)
+        .order_by(ChoreInstance.due_date)
+    )
+    due_dates = [inst.due_date for inst in result.scalars().all()]
+
+    # Weekly series from 2023-12-02: ... 12-23, 12-30, 01-06, 01-13 ...
+    # Window [12-29, 01-08] keeps exactly 12-30 and 01-06.
+    assert due_dates == [
+        old_first_due + timedelta(days=28),  # 2023-12-30
+        old_first_due + timedelta(days=35),  # 2024-01-06
+    ]
+
+
+async def test_generation_uses_single_household_lock_per_run(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All new instances of a household are assigned via ONE bulk call (one
+    SELECT FOR UPDATE on the household row), never via per-instance assign()."""
+    from app.services.assignment import AssignmentService, RoundRobinStrategy
+
+    user = _make_user()
+    user_b = _make_user()
+    household = _make_household()
+    await _flush(db_session, user, user_b, household)
+    await _flush(
+        db_session,
+        _make_membership(household.id, user.id),
+        HouseholdMembership(
+            id=uuid.uuid4(),
+            household_id=household.id,
+            user_id=user_b.id,
+            role="member",
+            joined_at=datetime(2024, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            is_active=True,
+        ),
+    )
+    # Two daily definitions → 2 * 8 = 16 new instances for this household.
+    for _ in range(2):
+        await _flush(
+            db_session,
+            _make_recurring_definition(
+                household.id, _FAKE_TODAY, {"interval_unit": "days", "interval_n": 1}
+            ),
+        )
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: _FAKE_TODAY)
+
+    bulk_calls: list[tuple] = []
+    orig_bulk = AssignmentService.redistribute_chores_bulk
+
+    async def spy_bulk(self, chore_instance_ids, household_id, session):
+        bulk_calls.append((household_id, len(chore_instance_ids)))
+        return await orig_bulk(self, chore_instance_ids, household_id, session)
+
+    async def fail_assign(self, household_id, session):
+        raise AssertionError("per-instance assign() must not be used by the scheduler")
+
+    monkeypatch.setattr(AssignmentService, "redistribute_chores_bulk", spy_bulk)
+    monkeypatch.setattr(RoundRobinStrategy, "assign", fail_assign)
+
+    await generate_chore_instances(db_session)
+
+    # Exactly one bulk (single-lock) call for the household, covering all 16 rows.
+    assert bulk_calls == [(household.id, 16)]
+
+    await db_session.refresh(household)
+    assert household.rotation_pointer == 16
+
+    result = await db_session.execute(
+        select(ChoreInstance).where(ChoreInstance.household_id == household.id)
+    )
+    instances = result.scalars().all()
+    assert len(instances) == 16
+    # Round-robin split between the two members.
+    per_member = {user.id: 0, user_b.id: 0}
+    for inst in instances:
+        per_member[inst.assignee_id] += 1
+    assert per_member == {user.id: 8, user_b.id: 8}

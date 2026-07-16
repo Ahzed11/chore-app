@@ -19,7 +19,7 @@ from app.api.leaderboard import router as leaderboard_router
 from app.api.members import router as members_router
 from app.api.users import router as users_router
 from app.core.config import settings
-from app.tasks.scheduler import start_scheduler, stop_scheduler
+from app.tasks.scheduler import run_daily_job, start_scheduler, stop_scheduler
 
 structlog.configure(
     processors=[
@@ -37,8 +37,20 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+logger = structlog.get_logger()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # TASK-073: run the daily job once at startup so that missed midnights
+    # (reboot, power cut) are caught up immediately.  run_daily_job is
+    # idempotent and advisory-locked, so this is safe with multiple workers.
+    # A failure here (e.g. DB briefly unavailable) must not prevent the API
+    # from starting — the cron trigger will retry at the next midnight.
+    try:
+        await run_daily_job()
+    except Exception:
+        logger.exception("scheduler.startup_run.failed")
     start_scheduler()
     yield
     stop_scheduler()

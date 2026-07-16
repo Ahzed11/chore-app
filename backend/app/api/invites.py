@@ -82,7 +82,12 @@ async def accept_invite(
     """Accept an invite token and join the associated household as a member."""
     now = datetime.now(timezone.utc)
 
-    result = await db.execute(select(InviteToken).where(InviteToken.token == token))
+    # Lock the invite row (SELECT ... FOR UPDATE) so two concurrent accepts of
+    # the same single-use token serialize: the second waits, then sees used_at
+    # set and gets 410 instead of redeeming the token twice (TASK-080).
+    result = await db.execute(
+        select(InviteToken).where(InviteToken.token == token).with_for_update()
+    )
     invite = result.scalar_one_or_none()
 
     if invite is None or invite.expires_at < now or invite.used_at is not None:
