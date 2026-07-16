@@ -30,36 +30,50 @@ class LeaderboardScope(str, Enum):
 
 
 def _get_today() -> date:
-    """Return today's date.  Extracted for easy mocking in tests."""
-    return date.today()
+    """Return today's date in UTC.  Extracted for easy mocking in tests.
+
+    Uses the UTC calendar date (not the host's local timezone) so that
+    leaderboard windows line up with the UTC-based nightly scheduler
+    (TASK-079).
+    """
+    return datetime.now(timezone.utc).date()
 
 
 def _compute_window(
     scope: LeaderboardScope,
 ) -> tuple[
     Optional[datetime],  # window_start (inclusive)
-    Optional[datetime],  # window_end (inclusive)
+    Optional[datetime],  # window_end (exclusive)
     Optional[date],      # week_start (response field, this_week only)
     Optional[date],      # week_end   (response field, this_week only)
     Optional[date],      # month_start (response field, this_month only)
     Optional[date],      # month_end   (response field, this_month only)
 ]:
-    """Compute the UTC datetime window and response-level date fields for a scope."""
+    """Compute the UTC datetime window and response-level date fields for a scope.
+
+    ``window_end`` is the *exclusive* upper bound — the instant the next
+    period begins — rather than the last second of the period, so an entry
+    awarded at e.g. 23:59:59.5 on the period's final day is still included
+    (TASK-079).
+    """
     today = _get_today()
 
     if scope == LeaderboardScope.this_week:
         week_start = today - timedelta(days=today.weekday())  # Monday
         week_end = week_start + timedelta(days=6)             # Sunday
         window_start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
-        window_end = datetime.combine(week_end, time(23, 59, 59), tzinfo=timezone.utc)
+        window_end = datetime.combine(
+            week_start + timedelta(days=7), time.min, tzinfo=timezone.utc
+        )
         return window_start, window_end, week_start, week_end, None, None
 
     if scope == LeaderboardScope.this_month:
         month_start = date(today.year, today.month, 1)
         last_day = calendar.monthrange(today.year, today.month)[1]
         month_end = date(today.year, today.month, last_day)
+        next_month_start = month_end + timedelta(days=1)
         window_start = datetime.combine(month_start, time.min, tzinfo=timezone.utc)
-        window_end = datetime.combine(month_end, time(23, 59, 59), tzinfo=timezone.utc)
+        window_end = datetime.combine(next_month_start, time.min, tzinfo=timezone.utc)
         return window_start, window_end, None, None, month_start, month_end
 
     # all_time — no filter
@@ -119,7 +133,7 @@ async def get_leaderboard(
     if window_start is not None:
         points_stmt = points_stmt.where(PointLedger.awarded_at >= window_start)
     if window_end is not None:
-        points_stmt = points_stmt.where(PointLedger.awarded_at <= window_end)
+        points_stmt = points_stmt.where(PointLedger.awarded_at < window_end)
     points_stmt = points_stmt.group_by(PointLedger.user_id)
 
     points_result = await db.execute(points_stmt)
@@ -143,7 +157,7 @@ async def get_leaderboard(
     if window_start is not None:
         chores_stmt = chores_stmt.where(ChoreInstance.completed_at >= window_start)
     if window_end is not None:
-        chores_stmt = chores_stmt.where(ChoreInstance.completed_at <= window_end)
+        chores_stmt = chores_stmt.where(ChoreInstance.completed_at < window_end)
     chores_stmt = chores_stmt.group_by(ChoreInstance.assignee_id)
 
     chores_result = await db.execute(chores_stmt)
