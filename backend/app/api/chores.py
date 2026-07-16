@@ -21,9 +21,11 @@ from app.models.household_membership import HouseholdMembership
 from app.models.point_ledger import PointLedger
 from app.models.user import User
 from app.schemas.chore import (
+    ChoreCategory,
     ChoreCreate,
     ChoreDefinitionResponse,
     ChoreInstanceResponse,
+    ChoreInstanceStatus,
     ChoreReassignRequest,
     ChoreUpdate,
     PaginatedChoreResponse,
@@ -176,8 +178,8 @@ async def create_chore(
 )
 async def list_chores(
     household_id: uuid.UUID,
-    status_filter: Optional[str] = None,
-    category: Optional[str] = None,
+    status_filter: Optional[ChoreInstanceStatus] = None,
+    category: Optional[ChoreCategory] = None,
     assignee_id: Optional[uuid.UUID] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -212,6 +214,7 @@ async def list_chores(
         .join(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
         .outerjoin(User, ChoreInstance.assignee_id == User.id)
         .where(*base_filters)
+        .order_by(ChoreInstance.due_date, ChoreInstance.id)
         .limit(limit)
         .offset(offset)
     )
@@ -399,6 +402,13 @@ async def reassign_chore(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Chore instance not found",
+        )
+
+    # Terminal instances (complete/cancelled) cannot be reassigned.
+    if instance.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Chore instance is '{instance.status}' and cannot be reassigned",
         )
 
     if body.assignee_id is not None:

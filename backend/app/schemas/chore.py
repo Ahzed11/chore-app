@@ -20,6 +20,9 @@ EffortLevel = Literal["easy", "medium", "hard"]
 ChoreType = Literal["one_off", "recurring"]
 IntervalUnit = Literal["days", "weeks", "months"]
 
+# Mirrors the "chore_status" PostgreSQL enum defined on ChoreInstance.status.
+ChoreInstanceStatus = Literal["pending", "complete", "overdue", "cancelled"]
+
 
 class RecurrenceRule(BaseModel):
     interval_unit: IntervalUnit

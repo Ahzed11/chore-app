@@ -699,3 +699,157 @@ async def test_list_chores_pagination(async_client: AsyncClient) -> None:
     assert len(data["items"]) == 2
     assert data["limit"] == 2
     assert data["offset"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TASK-071: pagination ordering, filter validation, reassignment guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_chores_pagination_is_stable(async_client: AsyncClient) -> None:
+    """Pages ordered by (due_date, id) never overlap or skip rows."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    # Three chores due on distinct days.
+    base_day = date.today()
+    for offset_days, title in enumerate(("Chore A", "Chore B", "Chore C")):
+        resp = await async_client.post(
+            f"/households/{household_id}/chores",
+            json=_one_off_payload(
+                household_id,
+                overrides={"title": title},
+                due_date=base_day + timedelta(days=offset_days),
+            ),
+        )
+        assert resp.status_code == 201, resp.text
+
+    page1 = await async_client.get(
+        f"/households/{household_id}/chores",
+        params={"limit": 2, "offset": 0},
+    )
+    page2 = await async_client.get(
+        f"/households/{household_id}/chores",
+        params={"limit": 2, "offset": 2},
+    )
+    assert page1.status_code == 200 and page2.status_code == 200
+
+    ids_page1 = [item["id"] for item in page1.json()["items"]]
+    ids_page2 = [item["id"] for item in page2.json()["items"]]
+
+    assert len(ids_page1) == 2
+    assert len(ids_page2) == 1
+    # No overlap and no skips: the two pages together cover all 3 instances.
+    assert set(ids_page1).isdisjoint(ids_page2)
+    assert len(set(ids_page1 + ids_page2)) == 3
+
+    # Ordering is by due_date ascending (then id for ties).
+    due_dates = [item["due_date"] for item in page1.json()["items"] + page2.json()["items"]]
+    assert due_dates == sorted(due_dates)
+
+
+@pytest.mark.asyncio
+async def test_list_chores_invalid_status_filter_422(async_client: AsyncClient) -> None:
+    """An unknown status_filter value must be rejected with 422, not crash with 500."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    response = await async_client.get(
+        f"/households/{household_id}/chores",
+        params={"status_filter": "bogus"},
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_list_chores_invalid_category_422(async_client: AsyncClient) -> None:
+    """An unknown category value must be rejected with 422, not crash with 500."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    response = await async_client.get(
+        f"/households/{household_id}/chores",
+        params={"category": "spaceship"},
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_list_chores_overdue_and_cancelled_status_accepted(
+    async_client: AsyncClient,
+) -> None:
+    """The instance-status values beyond pending/complete are valid filters."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    for status_value in ("overdue", "cancelled"):
+        response = await async_client.get(
+            f"/households/{household_id}/chores",
+            params={"status_filter": status_value},
+        )
+        assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_reassign_completed_instance_409(async_client: AsyncClient) -> None:
+    """PATCH /assignee on a complete instance returns 409."""
+    from sqlalchemy import update as sa_update
+
+    from app.models.chore_instance import ChoreInstance
+
+    sf = _get_session_factory()
+    household_id, member_id = await _seed_household_with_member(sf)
+
+    create_resp = await async_client.post(
+        f"/households/{household_id}/chores",
+        json=_one_off_payload(household_id),
+    )
+    assert create_resp.status_code == 201
+    instance_id = uuid.UUID(create_resp.json()["first_instance"]["id"])
+
+    # Mark the instance complete directly in the database.
+    async with sf() as session:
+        await session.execute(
+            sa_update(ChoreInstance)
+            .where(ChoreInstance.id == instance_id)
+            .values(status="complete", completed_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+
+    response = await async_client.patch(
+        f"/households/{household_id}/chores/{instance_id}/assignee",
+        json={"assignee_id": str(member_id)},
+    )
+    assert response.status_code == 409, response.text
+
+
+@pytest.mark.asyncio
+async def test_reassign_cancelled_instance_409(async_client: AsyncClient) -> None:
+    """PATCH /assignee on a cancelled instance returns 409 (auto-assign path too)."""
+    from sqlalchemy import update as sa_update
+
+    from app.models.chore_instance import ChoreInstance
+
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    create_resp = await async_client.post(
+        f"/households/{household_id}/chores",
+        json=_one_off_payload(household_id),
+    )
+    assert create_resp.status_code == 201
+    instance_id = uuid.UUID(create_resp.json()["first_instance"]["id"])
+
+    async with sf() as session:
+        await session.execute(
+            sa_update(ChoreInstance)
+            .where(ChoreInstance.id == instance_id)
+            .values(status="cancelled")
+        )
+        await session.commit()
+
+    response = await async_client.patch(
+        f"/households/{household_id}/chores/{instance_id}/assignee",
+        json={"assignee_id": None},
+    )
+    assert response.status_code == 409, response.text
