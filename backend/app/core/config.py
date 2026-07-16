@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Chore instance generation
     INSTANCE_GENERATION_DAYS_AHEAD: int = 7
 
+    # Backfill grace window (days): after downtime, instance generation starts
+    # at max(first_due_date, today - GRACE_DAYS) so a stale definition cannot
+    # flood the household with dozens of instantly-overdue instances.
+    GRACE_DAYS: int = 3
+
     # Debug / development
     DEBUG: bool = False
 

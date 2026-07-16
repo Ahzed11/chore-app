@@ -4,6 +4,7 @@ TASK-012: Provides generate_chore_instances, flag_overdue_instances, run_daily_j
 start_scheduler, and stop_scheduler. Integrate with FastAPI's lifespan event — see the
 comment block at the bottom of this module for the exact snippet to add to main.py.
 """
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import structlog
@@ -21,6 +22,11 @@ from app.services.assignment import AssignmentService, RoundRobinStrategy
 logger = structlog.get_logger()
 
 _scheduler: AsyncIOScheduler | None = None
+
+# If the process was suspended (or the event loop stalled) across the scheduled
+# midnight run, still fire the job as long as we are within this many seconds
+# of the scheduled time (TASK-073).
+MISFIRE_GRACE_SECONDS = 6 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +48,7 @@ def _compute_due_dates(
     first_due_date: date,
     recurrence_rule: dict,
     horizon: date,
+    floor: date | None = None,
 ) -> list[date]:
     """Return every due date in [first_due_date, horizon] for the given rule.
 
@@ -51,6 +58,10 @@ def _compute_due_dates(
 
     Uses ``timedelta`` for days/weeks and ``dateutil.relativedelta`` for months
     so that month-end arithmetic is handled correctly.
+
+    When ``floor`` is given, due dates earlier than it are skipped (backfill
+    cap, TASK-073).  Stepping still starts at ``first_due_date`` so the
+    recurrence phase is preserved — capping never shifts the cadence.
     """
     interval_unit: str = recurrence_rule.get("interval_unit", "days")
     interval_n: int = int(recurrence_rule.get("interval_n", 1))
@@ -71,7 +82,8 @@ def _compute_due_dates(
     due_dates: list[date] = []
     current = first_due_date
     while current <= horizon:
-        due_dates.append(current)
+        if floor is None or current >= floor:
+            due_dates.append(current)
         current = current + delta
 
     return due_dates
@@ -90,10 +102,17 @@ async def generate_chore_instances(session: AsyncSession) -> None:
     for any date that does not already have one.  Running this function multiple
     times on the same day is **idempotent** — no duplicate rows are ever created.
 
-    Auto-assignment is applied to each new instance via ``RoundRobinStrategy``.
+    TASK-073 hardening:
+    - Backfill is capped at ``max(first_due_date, today - GRACE_DAYS)`` so that
+      extended downtime (or a definition created with an old date) cannot flood
+      a household with dozens of instantly-overdue instances.
+    - New instances are batch-assigned with a single household row lock per
+      household per run (``AssignmentService.redistribute_chores_bulk``) instead
+      of one ``SELECT FOR UPDATE`` per instance.
     """
     today = _today()
     horizon = today + timedelta(days=settings.INSTANCE_GENERATION_DAYS_AHEAD)
+    backfill_floor = today - timedelta(days=settings.GRACE_DAYS)
 
     # Load all active recurring definitions in a single query.
     result = await session.execute(
@@ -103,8 +122,6 @@ async def generate_chore_instances(session: AsyncSession) -> None:
         )
     )
     definitions = result.scalars().all()
-
-    assignment_service = AssignmentService(RoundRobinStrategy())
 
     # Single bulk query — fetch all (definition_id, due_date) pairs that already
     # have a ChoreInstance for any of the active definitions.  This replaces the
@@ -117,6 +134,10 @@ async def generate_chore_instances(session: AsyncSession) -> None:
         existing_pairs: set[tuple] = set(existing_result.all())
     else:
         existing_pairs = set()
+
+    # Collect new (unassigned) instances grouped by household so assignment can
+    # be batched with one lock acquisition per household below.
+    new_by_household: dict[uuid.UUID, list[ChoreInstance]] = {}
 
     for definition in definitions:
         if not definition.recurrence_rule:
@@ -131,30 +152,40 @@ async def generate_chore_instances(session: AsyncSession) -> None:
             definition.first_due_date,
             definition.recurrence_rule,
             horizon,
+            floor=backfill_floor,
         )
 
         for due_date in due_dates:
             if (definition.id, due_date) in existing_pairs:
                 continue  # already exists — idempotent guard
 
-            assignee_id = await assignment_service.auto_assign(
-                definition.household_id, session
-            )
-
             instance = ChoreInstance(
+                id=uuid.uuid4(),
                 definition_id=definition.id,
                 household_id=definition.household_id,
-                assignee_id=assignee_id,
+                assignee_id=None,
                 assigned_manually=False,
                 due_date=due_date,
                 status="pending",
             )
             session.add(instance)
+            new_by_household.setdefault(definition.household_id, []).append(instance)
 
             # Track locally so a second iteration within the same call cannot
             # re-create the same (definition, date) pair before the flush hits
             # the database.
             existing_pairs.add((definition.id, due_date))
+
+    # Batch auto-assignment: one SELECT FOR UPDATE on the household row per
+    # household per run, cycling members in Python and writing the rotation
+    # pointer once (same pattern as AssignmentService.redistribute_chores_bulk).
+    assignment_service = AssignmentService(RoundRobinStrategy())
+    for household_id, instances in new_by_household.items():
+        assignments = await assignment_service.redistribute_chores_bulk(
+            [inst.id for inst in instances], household_id, session
+        )
+        for inst in instances:
+            inst.assignee_id = assignments.get(inst.id)
 
     await session.flush()
 
@@ -235,6 +266,8 @@ def start_scheduler() -> None:
         minute=0,
         id="daily_chore_scheduler",
         replace_existing=True,
+        misfire_grace_time=MISFIRE_GRACE_SECONDS,
+        coalesce=True,
     )
     _scheduler.start()
     logger.info(
