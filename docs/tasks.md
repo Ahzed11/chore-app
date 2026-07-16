@@ -22,7 +22,8 @@ Each task is designed to be self-contained. A developer agent can implement it b
 | TASK-056 | ✅ Done 2026-07-15 — refresh interceptor hardened (retry marker, /auth/ exclusion, shared-future queueing for concurrent 401s, network-vs-401 distinction, timeouts on the auth Dio, ApiEndpoints constants) + 7 mocked-adapter tests. Also covers TASK-055's deferred test debt. |
 | TASK-057 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/frontend-report.md`) |
 | TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI now runs on all branches (image publish stays default-branch only); ruff added to CI + config, all findings fixed. Coverage gate stays at 75%: the "68%" measured earlier was a coverage.py artifact fixed by `[tool.coverage.run] concurrency = ["greenlet", "thread"]` (merged from main/PR #2) — real coverage is **95%**. 137/137 tests pass, lint clean. |
-| TASK-070 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
+| TASK-070, TASK-071, TASK-072 | ✅ Done 2026-07-15 — access tokens now expire in minutes (`JWT_EXPIRY_MINUTES=30`, `JWT_EXPIRY_DAYS` deprecated fallback) + JWT_SECRET strength validation; chores list ORDER BY + 422 on bad filter params + reassign status guard; idempotent logout, daily expired-token cleanup, refresh replay revokes the token family, typed `/auth/refresh` response. |
+| TASK-073 … TASK-081 | ⏳ Open — Backend/DevOps tasks from the 2026-07-15 re-review (`docs/backend-report.md`) |
 
 ---
 
