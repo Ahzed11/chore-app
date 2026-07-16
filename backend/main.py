@@ -34,6 +34,8 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(),
 )
 
+logger = structlog.get_logger()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -94,7 +96,22 @@ app.add_middleware(
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
-    """Convert any unhandled DB IntegrityError (unique/FK violations) to HTTP 409."""
+    """Convert any unhandled DB IntegrityError (unique/FK violations) to HTTP 409.
+
+    This is a last-resort safety net for constraint violations that a route
+    did not already anticipate (e.g. a race between a pre-check and the
+    insert). It is intentionally broad, so the offending constraint is always
+    logged here — without that, a real bug (wrong constraint tripped, FK
+    violation from a coding error, etc.) would be silently flattened into a
+    generic 409 and become invisible.
+    """
+    constraint = getattr(exc.orig, "constraint_name", None)
+    logger.warning(
+        "db.integrity_error",
+        path=request.url.path,
+        constraint=constraint,
+        detail=str(exc.orig) if exc.orig is not None else str(exc),
+    )
     return JSONResponse(status_code=409, content={"detail": "Resource conflict"})
 
 app.include_router(health.router)

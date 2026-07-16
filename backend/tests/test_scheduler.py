@@ -402,3 +402,66 @@ async def test_generate_then_flag_produces_correct_statuses(
     jan8_inst = instances[1]
     assert jan8_inst.due_date == _FAKE_HORIZON
     assert jan8_inst.status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# cleanup_expired_tokens tests (TASK-072)
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_removes_only_expired_token_rows(db_session: AsyncSession) -> None:
+    """Expired revoked/refresh token rows are purged; unexpired rows survive."""
+    from datetime import timedelta
+
+    from app.models.refresh_token import RefreshToken
+    from app.models.revoked_token import RevokedToken
+    from app.tasks.scheduler import cleanup_expired_tokens
+
+    user = _make_user()
+    await _flush(db_session, user)
+
+    now = datetime.now(timezone.utc)
+    expired_jti = str(uuid.uuid4())
+    active_jti = str(uuid.uuid4())
+
+    await _flush(
+        db_session,
+        RevokedToken(jti=expired_jti, revoked_at=now - timedelta(days=8), expires_at=now - timedelta(days=1)),
+        RevokedToken(jti=active_jti, revoked_at=now, expires_at=now + timedelta(days=1)),
+        RefreshToken(
+            user_id=user.id,
+            token_hash="e" * 64,
+            created_at=now - timedelta(days=31),
+            expires_at=now - timedelta(days=1),
+        ),
+        RefreshToken(
+            user_id=user.id,
+            token_hash="a" * 64,
+            created_at=now,
+            expires_at=now + timedelta(days=29),
+        ),
+    )
+
+    await cleanup_expired_tokens(db_session)
+
+    remaining_jtis = set(
+        (
+            await db_session.execute(
+                select(RevokedToken.jti).where(
+                    RevokedToken.jti.in_([expired_jti, active_jti])
+                )
+            )
+        ).scalars().all()
+    )
+    remaining_hashes = set(
+        (
+            await db_session.execute(
+                select(RefreshToken.token_hash).where(
+                    RefreshToken.user_id == user.id
+                )
+            )
+        ).scalars().all()
+    )
+
+    assert remaining_jtis == {active_jti}
+    assert remaining_hashes == {"a" * 64}

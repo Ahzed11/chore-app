@@ -238,3 +238,112 @@ async def test_logout_revokes_refresh_token(async_client: AsyncClient) -> None:
         json={"refresh_token": refresh_token},
     )
     assert refresh_response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# TASK-070: short-lived access tokens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_login_expires_in_matches_configured_minutes(async_client: AsyncClient) -> None:
+    """expires_in must reflect JWT_EXPIRY_MINUTES (minutes, not a hardcoded 7 days)."""
+    from app.core.config import settings
+
+    body = await _login(async_client)
+    assert body["expires_in"] == settings.JWT_EXPIRY_MINUTES * 60
+
+
+@pytest.mark.asyncio
+async def test_access_token_exp_claim_matches_expires_in(async_client: AsyncClient) -> None:
+    """The JWT's exp claim must be ~expires_in seconds in the future."""
+    import time
+
+    from app.core.security import decode_access_token
+
+    before = time.time()
+    body = await _login(async_client)
+    payload = decode_access_token(body["access_token"])
+
+    lifetime = payload["exp"] - before
+    # Allow a little slack for the time spent handling the request.
+    assert body["expires_in"] - 60 <= lifetime <= body["expires_in"] + 60
+
+
+def test_default_token_lifetime_is_minutes_scale() -> None:
+    """create_access_token without an explicit delta uses JWT_EXPIRY_MINUTES."""
+    import time
+
+    from app.core.config import settings
+    from app.core.security import create_access_token, decode_access_token
+
+    token = create_access_token("some-subject")
+    payload = decode_access_token(token)
+    lifetime = payload["exp"] - time.time()
+    expected = settings.JWT_EXPIRY_MINUTES * 60
+    assert expected - 60 <= lifetime <= expected + 60
+
+
+# ---------------------------------------------------------------------------
+# TASK-072: idempotent logout, refresh replay hardening, typed refresh response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_double_logout_is_idempotent(async_client: AsyncClient) -> None:
+    """Logging out twice with the same access token returns 200 both times."""
+    login_body = await _login(async_client)
+    headers = {"Authorization": f"Bearer {login_body['access_token']}"}
+
+    first = await async_client.post("/auth/logout", headers=headers)
+    assert first.status_code == 200, first.text
+
+    second = await async_client.post("/auth/logout", headers=headers)
+    assert second.status_code == 200, second.text
+
+
+@pytest.mark.asyncio
+async def test_refresh_response_shape_matches_login(async_client: AsyncClient) -> None:
+    """/auth/refresh returns the same TokenResponse shape as /auth/login."""
+    login_body = await _login(async_client)
+
+    response = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": login_body["refresh_token"]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert set(body.keys()) == set(login_body.keys())
+    assert body["token_type"] == "bearer"
+    assert isinstance(body["expires_in"], int)
+    assert body["expires_in"] == login_body["expires_in"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_revokes_token_family(async_client: AsyncClient) -> None:
+    """Replaying a rotated refresh token revokes ALL of the user's refresh tokens."""
+    login_body = await _login(async_client)
+    original_refresh = login_body["refresh_token"]
+
+    # Legitimate rotation: original -> current.
+    rotated = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": original_refresh},
+    )
+    assert rotated.status_code == 200
+    current_refresh = rotated.json()["refresh_token"]
+
+    # Attacker replays the consumed original token -> 401 + family revocation.
+    replay = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": original_refresh},
+    )
+    assert replay.status_code == 401
+
+    # The still-unused current token must now also be rejected.
+    after_replay = await async_client.post(
+        "/auth/refresh",
+        json={"refresh_token": current_refresh},
+    )
+    assert after_replay.status_code == 401

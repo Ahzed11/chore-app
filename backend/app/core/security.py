@@ -34,11 +34,11 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
     """Return a signed JWT encoding *subject* as the ``sub`` claim.
 
     If *expires_delta* is not provided, the token expires after
-    ``settings.JWT_EXPIRY_DAYS`` days. Tests pass an explicit delta to
+    ``settings.JWT_EXPIRY_MINUTES`` minutes. Tests pass an explicit delta to
     mint short-lived or already-expired tokens.
     """
     if expires_delta is None:
-        expires_delta = timedelta(days=settings.JWT_EXPIRY_DAYS)
+        expires_delta = timedelta(minutes=settings.JWT_EXPIRY_MINUTES)
     expire = datetime.now(timezone.utc) + expires_delta
     payload = {
         "sub": subject,
