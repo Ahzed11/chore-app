@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.security import (
     create_access_token,
     decode_access_token,
@@ -31,10 +32,26 @@ logger = structlog.get_logger()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) -> User:
+@limiter.limit(lambda: settings.RATE_LIMIT_REGISTER)
+async def register(
+    request: Request,
+    response: Response,
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> User:
     """Register a new user account.
 
     Returns the created user.  Raises 409 if the email is already taken.
+
+    Rate limited per client IP (default ``settings.RATE_LIMIT_REGISTER``,
+    10/hour) — see TASK-031.  Exceeding it returns 429 with a Retry-After
+    header before the request reaches this function body.
+
+    The unused ``response`` parameter is required so slowapi can attach
+    rate-limit headers to the outgoing response: this endpoint returns a
+    ``User`` ORM object (serialized via ``response_model``) rather than a
+    ``Response`` instance directly, so slowapi needs FastAPI's
+    dependency-injected ``Response`` to write headers onto.
     """
     result = await db.execute(select(User).where(User.email == body.email))
     existing = result.scalar_one_or_none()
@@ -56,11 +73,25 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) ->
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+@limiter.limit(lambda: settings.RATE_LIMIT_LOGIN)
+async def login(
+    request: Request,
+    response: Response,
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
     """Authenticate a user and return a signed JWT plus a refresh token.
 
     Returns 401 for both unknown email and wrong password so that callers
     cannot distinguish which field was incorrect (enumeration hardening).
+
+    Rate limited per client IP (default ``settings.RATE_LIMIT_LOGIN``,
+    5/minute) — see TASK-031 — to slow brute-force/credential-stuffing
+    attempts. Exceeding it returns 429 with a Retry-After header.
+
+    The unused ``response`` parameter lets slowapi attach rate-limit headers
+    to the outgoing response (this endpoint returns a ``TokenResponse``
+    model rather than a ``Response`` instance directly).
     """
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
@@ -115,7 +146,10 @@ class RefreshRequest(BaseModel):
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit(lambda: settings.RATE_LIMIT_REFRESH)
 async def refresh_token(
+    request: Request,
+    response: Response,
     body: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -129,6 +163,16 @@ async def refresh_token(
     signal the refresh-token family may have been stolen — every refresh
     token for the user is revoked (standard reuse/theft mitigation) and the
     request still fails with 401.
+
+    Rate limited per client IP (default ``settings.RATE_LIMIT_REFRESH``,
+    30/minute) — see TASK-031. This endpoint is unauthenticated and
+    credential-bearing (accepts a raw refresh token), so it is rate limited
+    alongside login/register, just with a looser cap since it's also hit by
+    legitimate token-refresh traffic.
+
+    The unused ``response`` parameter lets slowapi attach rate-limit headers
+    to the outgoing response (this endpoint returns a ``TokenResponse``
+    model rather than a ``Response`` instance directly).
     """
     token_hash = hashlib.sha256(body.refresh_token.encode()).hexdigest()
     now = datetime.now(timezone.utc)

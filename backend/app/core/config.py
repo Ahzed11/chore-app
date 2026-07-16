@@ -64,6 +64,25 @@ class Settings(BaseSettings):
     # CORS
     CORS_ALLOWED_ORIGINS: list[str] = []
 
+    # Rate limiting (TASK-031): protects the unauthenticated, credential-bearing
+    # auth endpoints (login/register/refresh) from brute-force and
+    # credential-stuffing. Keyed per client IP via the ASGI scope's
+    # request.client — which uvicorn rewrites from X-Forwarded-For itself when
+    # run with --proxy-headers behind a trusted reverse proxy — so the app
+    # never needs to parse forwarded headers directly. Limit strings use the
+    # `limits` package's "<count>/<period>" syntax (e.g. "5/minute").
+    #
+    # RATE_LIMIT_ENABLED exists mainly so the test suite can disable rate
+    # limiting globally (see backend/tests/conftest.py) — the 200+ existing
+    # tests that log in/register repeatedly would otherwise flake against
+    # these caps. Individual limit strings are read per-request (not cached
+    # at startup), so tests can also override them to exercise 429 behavior
+    # with tight, fast limits.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN: str = "5/minute"
+    RATE_LIMIT_REGISTER: str = "10/hour"
+    RATE_LIMIT_REFRESH: str = "30/minute"
+
     @field_validator("JWT_SECRET")
     @classmethod
     def _validate_jwt_secret(cls, value: str) -> str:
