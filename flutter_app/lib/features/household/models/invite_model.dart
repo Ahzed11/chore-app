@@ -28,3 +28,33 @@ class InviteResponse {
     };
   }
 }
+
+/// Metadata for an existing active (non-expired, unused) invite token as
+/// returned by `GET /households/{id}/invites`.
+///
+/// Unlike [InviteResponse] (returned only once, at creation time via
+/// `POST /households/{id}/invites`), this does *not* include the full token
+/// or invite URL — only a masked preview (`token_preview`, e.g. `"aB3dEf12***"`)
+/// since the backend never re-exposes a full token after generation.
+class InviteTokenSummary {
+  const InviteTokenSummary({
+    required this.id,
+    required this.tokenPreview,
+    required this.createdAt,
+    required this.expiresAt,
+  });
+
+  final String id;
+  final String tokenPreview;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+
+  factory InviteTokenSummary.fromJson(Map<String, dynamic> json) {
+    return InviteTokenSummary(
+      id: json['id'] as String,
+      tokenPreview: json['token_preview'] as String,
+      createdAt: DateTime.parse(json['created_at'] as String).toUtc(),
+      expiresAt: DateTime.parse(json['expires_at'] as String).toUtc(),
+    );
+  }
+}

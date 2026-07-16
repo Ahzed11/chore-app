@@ -60,7 +60,7 @@ class _HouseholdManagementScreenState
   final _nameController = TextEditingController();
   bool _inviteOpen = false;
   InviteResponse? _inviteResponse;
-  bool _inviteLoading = false;
+  bool _generatingInvite = false;
   bool _copied = false;
 
   @override
@@ -73,27 +73,54 @@ class _HouseholdManagementScreenState
   // Invite
   // -------------------------------------------------------------------------
 
+  /// Opens/closes the invite accordion. Opening it only *lists* existing
+  /// active invites (`GET /households/{id}/invites`) — it never generates a
+  /// new token. A new token is only ever created via [_generateInvite], which
+  /// is wired to an explicit "Generate new invite" button.
   void _toggleInvite() {
     setState(() => _inviteOpen = !_inviteOpen);
-    if (_inviteOpen && _inviteResponse == null) _fetchInvite();
   }
 
-  Future<void> _fetchInvite() async {
-    setState(() => _inviteLoading = true);
+  Future<void> _generateInvite() async {
+    setState(() => _generatingInvite = true);
     try {
       final inv =
           await ref.read(inviteApiProvider).generateInvite(widget.householdId);
       if (mounted) {
         setState(() {
           _inviteResponse = inv;
-          _inviteLoading = false;
+          _generatingInvite = false;
         });
+        // The newly created token is now the active one — refresh the list
+        // so it (and the fact any older token was auto-revoked) is reflected.
+        ref.invalidate(invitesProvider(widget.householdId));
       }
     } catch (e) {
-      if (mounted) setState(() => _inviteLoading = false);
+      if (mounted) setState(() => _generatingInvite = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to generate invite: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _revokeInvite(String inviteId) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(inviteApiProvider)
+          .revokeInvite(widget.householdId, inviteId);
+      ref.invalidate(invitesProvider(widget.householdId));
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Invite revoked.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to revoke invite: $e')),
         );
       }
     }
@@ -255,8 +282,13 @@ class _HouseholdManagementScreenState
                         isAdmin: household.isAdmin,
                       ),
                     ),
-                    const SizedBox(height: 26),
-                    _buildInviteSection(),
+                    // Invite generation/listing/revocation are admin-only on
+                    // the backend (`require_admin`); hide the whole section
+                    // from non-admin members rather than surfacing 403s.
+                    if (household.isAdmin) ...[
+                      const SizedBox(height: 26),
+                      _buildInviteSection(),
+                    ],
                     const SizedBox(height: 26),
                     _buildDangerZone(),
                   ],
@@ -396,116 +428,11 @@ class _HouseholdManagementScreenState
               ),
               AnimatedCrossFade(
                 firstChild: const SizedBox.shrink(),
-                secondChild: Container(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  child: Column(
-                    children: [
-                      if (_inviteLoading)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: CircularProgressIndicator(
-                            color: _teal,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      else if (_inviteResponse != null) ...[
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 11,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF4F8F7),
-                            border:
-                                Border.all(color: const Color(0xFFE6EDEC)),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.link_rounded,
-                                size: 16,
-                                color: _secondaryText,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  _inviteResponse!.inviteUrl,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF5B7A76),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              border: Border.all(color: const Color(0xFFE6EDEC)),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: QrImageView(
-                              data: _inviteResponse!.inviteUrl,
-                              version: QrVersions.auto,
-                              size: 160,
-                              eyeStyle: const QrEyeStyle(
-                                eyeShape: QrEyeShape.square,
-                                color: _darkText,
-                              ),
-                              dataModuleStyle: const QrDataModuleStyle(
-                                dataModuleShape: QrDataModuleShape.square,
-                                color: _darkText,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        GestureDetector(
-                          onTap: _copyInviteLink,
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            decoration: BoxDecoration(
-                              color: _copied
-                                  ? const Color(0xFF15A394)
-                                  : _teal,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  _copied
-                                      ? Icons.check_rounded
-                                      : Icons.copy_rounded,
-                                  size: 16,
-                                  color: Colors.white,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _copied ? 'Link copied!' : 'Copy invite link',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+                // Only build (and therefore only start watching `invitesProvider`,
+                // which triggers the GET request) once the section is actually
+                // opened — avoids fetching invites the admin never looks at.
+                secondChild:
+                    _inviteOpen ? _buildInviteExpanded() : const SizedBox.shrink(),
                 crossFadeState: _inviteOpen
                     ? CrossFadeState.showSecond
                     : CrossFadeState.showFirst,
@@ -515,6 +442,212 @@ class _HouseholdManagementScreenState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildInviteExpanded() {
+    final invitesAsync = ref.watch(invitesProvider(widget.householdId));
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        children: [
+          // ---- Just-generated invite: full URL + QR (session-only) --------
+          // The backend never re-exposes a full token/URL after creation, so
+          // this block only ever shows the invite most recently generated in
+          // this session — older ones fall back to metadata-only rows below.
+          if (_inviteResponse != null) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 11,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF4F8F7),
+                border: Border.all(color: const Color(0xFFE6EDEC)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.link_rounded,
+                    size: 16,
+                    color: _secondaryText,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _inviteResponse!.inviteUrl,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF5B7A76),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFE6EDEC)),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: QrImageView(
+                  data: _inviteResponse!.inviteUrl,
+                  version: QrVersions.auto,
+                  size: 160,
+                  eyeStyle: const QrEyeStyle(
+                    eyeShape: QrEyeShape.square,
+                    color: _darkText,
+                  ),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: _darkText,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: _copyInviteLink,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: _copied ? const Color(0xFF15A394) : _teal,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      _copied ? Icons.check_rounded : Icons.copy_rounded,
+                      size: 16,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _copied ? 'Link copied!' : 'Copy invite link',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+          ],
+
+          // ---- Generate new invite (explicit user action only) ------------
+          GestureDetector(
+            key: const Key('generate_invite_button'),
+            onTap: _generatingInvite ? null : _generateInvite,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: _teal, width: 1.5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (_generatingInvite)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        color: _teal,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  else
+                    const Icon(Icons.add_link_rounded,
+                        size: 18, color: _teal),
+                  const SizedBox(width: 8),
+                  Text(
+                    _inviteResponse == null
+                        ? 'Generate invite link'
+                        : 'Generate new invite link',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: _teal,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          // ---- Active invites (metadata + revoke) --------------------------
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'ACTIVE INVITES',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: _secondaryText,
+                letterSpacing: 11.5 * 0.02,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          invitesAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: CircularProgressIndicator(
+                color: _teal,
+                strokeWidth: 2,
+              ),
+            ),
+            error: (error, _) => Padding(
+              key: const Key('invites_error'),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Failed to load invites: $error',
+                style: const TextStyle(fontSize: 12.5, color: Colors.red),
+              ),
+            ),
+            data: (invites) => invites.isEmpty
+                ? const Padding(
+                    key: Key('no_active_invites'),
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No active invites',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: _secondaryText,
+                      ),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (final invite in invites)
+                        _InviteTokenRow(
+                          key: Key('invite_row_${invite.id}'),
+                          invite: invite,
+                          onRevoke: () => _revokeInvite(invite.id),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1278,4 +1411,91 @@ void _showMemberActions(
       ),
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Active invite row (metadata + revoke)
+// ---------------------------------------------------------------------------
+
+/// A single row in the "Active invites" list. Only shows the masked
+/// [InviteTokenSummary.tokenPreview] — the backend's `GET
+/// /households/{id}/invites` endpoint never returns full tokens/URLs, so
+/// there is no link/QR to display here (that's only ever available for the
+/// invite most recently generated in this session; see [InviteResponse]).
+class _InviteTokenRow extends StatelessWidget {
+  const _InviteTokenRow({
+    super.key,
+    required this.invite,
+    required this.onRevoke,
+  });
+
+  final InviteTokenSummary invite;
+  final VoidCallback onRevoke;
+
+  @override
+  Widget build(BuildContext context) {
+    final expiresAt = invite.expiresAt.toLocal();
+    final isExpiringSoon =
+        expiresAt.difference(DateTime.now()).inHours < 24;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F8F7),
+        border: Border.all(color: const Color(0xFFE6EDEC)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.vpn_key_rounded, size: 16, color: _secondaryText),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  invite.tokenPreview,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF5B7A76),
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Expires ${DateFormat("MMM d, h:mm a").format(expiresAt)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: isExpiringSoon
+                        ? const Color(0xFFDC4D4D)
+                        : _secondaryText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            key: Key('revoke_invite_${invite.id}'),
+            onTap: onRevoke,
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDEAEA),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: const Icon(
+                Icons.close_rounded,
+                size: 16,
+                color: Color(0xFFDC4D4D),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
