@@ -9,13 +9,15 @@ from datetime import date, datetime, timedelta, timezone
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dateutil.relativedelta import relativedelta
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
+from app.models.refresh_token import RefreshToken
+from app.models.revoked_token import RevokedToken
 from app.services.assignment import AssignmentService, RoundRobinStrategy
 
 logger = structlog.get_logger()
@@ -177,6 +179,29 @@ async def flag_overdue_instances(session: AsyncSession) -> None:
     )
 
 
+async def cleanup_expired_tokens(session: AsyncSession) -> None:
+    """Delete expired ``revoked_tokens`` and ``refresh_tokens`` rows.
+
+    Both tables grow forever otherwise: every login adds a ``refresh_tokens``
+    row and every logout adds a ``revoked_tokens`` row.  Once a row's
+    ``expires_at`` is in the past it no longer serves any purpose — an expired
+    JWT is already rejected on ``exp`` alone, and an expired refresh token is
+    already rejected by the refresh endpoint — so it is safe to purge.
+    """
+    now = datetime.now(timezone.utc)
+    revoked_result = await session.execute(
+        delete(RevokedToken).where(RevokedToken.expires_at < now)
+    )
+    refresh_result = await session.execute(
+        delete(RefreshToken).where(RefreshToken.expires_at < now)
+    )
+    logger.info(
+        "scheduler.token_cleanup",
+        revoked_tokens_deleted=revoked_result.rowcount,
+        refresh_tokens_deleted=refresh_result.rowcount,
+    )
+
+
 async def run_daily_job() -> None:
     """Open a database session, run both scheduler tasks, and commit.
 
@@ -204,6 +229,7 @@ async def run_daily_job() -> None:
         try:
             await generate_chore_instances(session)
             await flag_overdue_instances(session)
+            await cleanup_expired_tokens(session)
             await session.commit()
             logger.info("scheduler.daily_job.completed")
         except Exception:
