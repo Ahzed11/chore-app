@@ -67,7 +67,7 @@ To stop: `make prod-down`.
 
 All settings the backend reads (`backend/app/core/config.py`) are listed
 with defaults in `.env.example` — see it for the full list
-(`JWT_EXPIRY_DAYS`, `REFRESH_TOKEN_TTL_DAYS`, `INVITE_TOKEN_TTL_HOURS`,
+(`JWT_EXPIRY_MINUTES`, `REFRESH_TOKEN_TTL_DAYS`, `INVITE_TOKEN_TTL_HOURS`,
 `SCHEDULER_RUN_HOUR`, `INSTANCE_GENERATION_DAYS_AHEAD`,
 `CORS_ALLOWED_ORIGINS`, etc.). Nothing needs to be set by editing the
 compose YAML.
