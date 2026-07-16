@@ -6,6 +6,9 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -19,6 +22,7 @@ from app.api.leaderboard import router as leaderboard_router
 from app.api.members import router as members_router
 from app.api.users import router as users_router
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.tasks.scheduler import run_daily_job, start_scheduler, stop_scheduler
 
 structlog.configure(
@@ -89,14 +93,25 @@ app = FastAPI(
     openapi_url=openapi_url,
 )
 
+# TASK-031: rate limiting on auth endpoints. `limiter` (app/core/rate_limit.py)
+# is keyed per client IP; app.state.limiter is where slowapi's exception
+# handler/middleware look it up, and the per-route @limiter.limit(...)
+# decorators live on the individual routes in app/api/auth.py.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Middleware is applied in reverse registration order (last added = outermost).
 # SecurityHeadersMiddleware is registered first (innermost layer).
 # RequestIDMiddleware is registered second — wraps SecurityHeaders, seeds the
 # structlog context with a per-request UUID, and echoes it in X-Request-ID.
+# SlowAPIMiddleware is registered third — required by slowapi so its exception
+# handler machinery is wired into the ASGI stack; the actual per-route auth
+# limits are enforced by the @limiter.limit(...) decorators themselves.
 # CORSMiddleware is registered last (outermost layer) so it handles preflight
 # before any other middleware runs.
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,

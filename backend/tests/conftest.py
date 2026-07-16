@@ -14,9 +14,24 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.core.rate_limit import limiter
 from app.db.base import Base
 from app.db.session import get_db
 from main import app
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _disable_rate_limiting_by_default() -> None:
+    """TASK-031: keep the shared slowapi limiter off for the whole test session.
+
+    ``limiter`` (app/core/rate_limit.py) defaults to
+    ``Settings.RATE_LIMIT_ENABLED`` (True in production). Left on, the 200+
+    existing tests that log in/register repeatedly against the same client IP
+    would start flaking against the 5/minute login and 10/hour register caps.
+    Dedicated rate-limit tests (tests/test_rate_limit.py) flip ``limiter.enabled``
+    back on locally, with tight test-only limits, to assert the 429 behavior.
+    """
+    limiter.enabled = False
 
 
 @pytest.fixture(scope="session", autouse=True)
