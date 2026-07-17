@@ -1531,6 +1531,77 @@ Several mutations leave sibling providers stale:
 
 ---
 
+## TASK-060: Flutter — Wire Up Chore Editing (Currently Unreachable)
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-8
+
+`CreateChoreScreen` fully supports edit mode via `ChoreFormInitData`, but nothing in the app ever constructs it: no navigation passes it as `extra`, and the admin long-press menu on a chore card (`chore_card.dart:215-252`) only offers "Delete series". Chore editing effectively does not exist. Additionally the due-date validator (`create_chore_screen.dart:455-464`) rejects past dates even in edit mode, so a chore whose date already passed could not be saved unchanged.
+
+**Steps**:
+1. Add an "Edit series" item to `_showAdminMenu` in `chore_card.dart`, constructing `ChoreFormInitData` from the chore's definition fields and navigating to the create/edit route with it as `extra`.
+2. In edit mode, skip (or relax) the "due date must not be in the past" validation when the date is unchanged.
+3. On successful save, refresh the chores list (existing behavior for create should already do this — verify for edit).
+4. Widget tests: admin menu shows "Edit series"; screen opens pre-populated; saving calls `PATCH /households/{id}/chores/{definitionId}`.
+
+**Acceptance criteria**:
+- [ ] An admin can edit an existing chore definition end-to-end.
+- [ ] Members do not see the edit action.
+- [ ] Editing a chore with a past due date does not trap the user in validation errors.
+
+---
+
+---
+
+## TASK-061: Flutter — Invite Deep Links
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: TASK-057  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-10
+
+Invite QR codes and share links encode the backend `invite_url` (`{APP_BASE_URL}/join/{token}`), but the app registers no intent-filter and no matching route — scanning the QR opens a browser pointed at the API server. Joining currently requires manually copy-pasting the token into the dashboard dialog.
+
+**Steps**:
+1. Add a GoRouter route `/join/:token` that calls the existing `joinByToken` flow and navigates to the household on success.
+2. Register an Android intent-filter (App Links or a custom scheme such as `choreapp://join/{token}` — if using a custom scheme, change what the QR encodes accordingly; the URL scheme choice should be documented in the task PR).
+3. Handle the logged-out case: stash the pending token, complete login/registration, then join and clear the stash.
+4. Widget tests for the route: logged-in user joining; logged-out user redirected to login then joined.
+
+**Acceptance criteria**:
+- [ ] Scanning an invite QR on a device with the app installed opens the app and joins the household (after login if needed).
+- [ ] Invalid/expired tokens show the existing error handling.
+
+---
+
+---
+
+## TASK-062: Flutter — Friendly API Error Messages
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-12, F-13
+
+`AppErrorWidget` (`shared/widgets/error_widget.dart:38`) and ~10 call sites render `error.toString()`, which for a `DioException` dumps the full request URL and Dio boilerplate at the user. `_extractMessage` (`auth_provider.dart:112`) is a partial solution but is auth-only and renders FastAPI 422 validation lists as raw JSON. Separately, the household rename flow (`household_management_screen.dart:230-238`) has no error handling at all — failures leave the edit UI open with no feedback.
+
+**Steps**:
+1. Create a shared `String friendlyErrorMessage(Object error)` helper in `lib/core/api/` that maps: connection/timeout errors → "Can't reach the server"; 401/403 → permission message; 409/410/422 → extract `detail` from the response body, flattening FastAPI validation error lists into readable text; anything else → generic message.
+2. Use it in `AppErrorWidget` (accept the raw error, not a pre-stringified message) and in all snackbar `catch` blocks.
+3. Wrap `updateHouseholdName` in try/catch in the management screen; show a snackbar on failure and keep the previous name.
+4. Unit tests for the mapper covering each branch, including a FastAPI 422 body.
+
+**Acceptance criteria**:
+- [ ] No screen ever displays a raw `DioException` string.
+- [ ] FastAPI `detail` messages (e.g. "You are not assigned to this chore") pass through verbatim.
+- [ ] Failed household rename shows feedback and does not corrupt UI state.
+
+---
+
+---
+
 ## TASK-063: Flutter — Real Release Signing, Application ID, and Versioning
 
 **Domain**: Flutter / DevOps  
