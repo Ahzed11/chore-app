@@ -1479,6 +1479,104 @@ The refresh interceptor in `lib/core/api/api_client.dart:37-63` has three defect
 
 ---
 
+## TASK-058: Flutter — Fetch All Chore Pages (List Truncated at 50)
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: TASK-045  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-6
+
+`_fetchChores` (`lib/features/chores/providers/chores_provider.dart:84-93`) sends no `limit`/`offset` and ignores the `total` field; the backend defaults to `limit=50` (`backend/app/api/chores.py:182`). Households with recurring chores exceed 50 instances quickly: older items silently vanish from the list, the "Done" tab is incomplete, and the client-side weekly-points sum (`my_chores_screen.dart:111-115`) is quietly wrong.
+
+**Steps**:
+1. In `_fetchChores`, loop: request with `limit=100` and increasing `offset`, accumulating `items`, until the accumulated count reaches `total`. Guard with a sane max (e.g. 10 pages) to avoid pathological loops.
+2. Keep the return type `List<ChoreModel>` so screens are unaffected.
+3. Unit-test the pagination loop with a mocked Dio returning two pages.
+
+**Acceptance criteria**:
+- [ ] A household with >50 chore instances shows all of them.
+- [ ] Exactly ⌈total/100⌉ requests are made.
+- [ ] Existing widget tests remain green.
+
+---
+
+---
+
+## TASK-059: Flutter — Invalidate Related Providers After Mutations
+
+**Domain**: Flutter  
+**Priority**: High  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-11
+
+Several mutations leave sibling providers stale:
+- `completeChore` (`chores_provider.dart:101-147`) never invalidates `leaderboardProvider` / `weeklyLeaderboardProvider` — the rank pill on My Chores and the Leaderboard tab show pre-completion data.
+- `removeMember` / `changeRole` don't invalidate `choresNotifierProvider` — assignee names go stale after redistribution.
+- `leaveHousehold` / `joinByToken` don't invalidate the members/chores families.
+- The My Chores `RefreshIndicator` (`my_chores_screen.dart:156-159`) refreshes only the chores provider, not the weekly leaderboard.
+
+**Steps**:
+1. After a successful `completeChore`, call `ref.invalidate(leaderboardProvider(householdId))` and `ref.invalidate(weeklyLeaderboardProvider(householdId))` (match the actual provider family arguments).
+2. After `removeMember`/`changeRole`, invalidate the chores family for that household.
+3. After `leaveHousehold`/`joinByToken`, invalidate members and chores families.
+4. Include the weekly leaderboard in the My Chores pull-to-refresh.
+5. Add provider-level tests asserting invalidation (listen to the providers with a `ProviderContainer` and assert refetch).
+
+**Acceptance criteria**:
+- [ ] Completing a chore updates the rank pill and leaderboard without a manual refresh.
+- [ ] Removing a member refreshes chore assignee names.
+- [ ] Tests cover at least the completeChore → leaderboard invalidation path.
+
+---
+
+---
+
+## TASK-063: Flutter — Real Release Signing, Application ID, and Versioning
+
+**Domain**: Flutter / DevOps  
+**Priority**: Medium  
+**Depends on**: TASK-054  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-14
+
+`android/app/build.gradle.kts` still signs release builds with the **debug keystore** (template TODO comment), `applicationId` is the Flutter template placeholder, the launcher label is `chore_app`, and `pubspec.yaml` is pinned at `1.0.0+1` with no version bumping — so users cannot cleanly upgrade between CI builds.
+
+**Steps**:
+1. Choose a real `applicationId` (e.g. `dev.ahzed11.choreapp`) and set the launcher label to "ChoreApp" in the main manifest.
+2. Add release keystore support: read keystore path/passwords from `key.properties` (gitignored) or environment variables; fall back to debug signing only when absent, with a build-time warning.
+3. In `.github/workflows/flutter.yml`, decode a base64 keystore from a GitHub secret and pass signing env vars; document the required secrets in the workflow file comments.
+4. Derive `versionCode` in CI (e.g. `--build-number=$GITHUB_RUN_NUMBER`) so each APK upgrade-installs over the previous one.
+
+**Acceptance criteria**:
+- [ ] CI-built APK is signed with the release keystore when secrets are configured.
+- [ ] Two successive CI APKs install as an upgrade (increasing versionCode) without uninstalling.
+- [ ] `applicationId` and app label are no longer template values. NOTE: changing applicationId means existing installs will not upgrade in place — call this out in the commit message.
+
+---
+
+---
+
+## TASK-064: Flutter — Show Server-Awarded Points Everywhere
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: TASK-051  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` §1 (TASK-051 verification), F-24
+
+TASK-051 fixed the weekly-points banner, but the completion snackbars (`chore_list_screen.dart:130`, `my_chores_screen.dart:220`), the confirmation sheet (`chore_card.dart:532`), and the completed-card points pill (`chore_card.dart:187`) still display client-derived `pointValue` instead of the server's authoritative `pointsAwarded`, which the `completeChore` response already contains.
+
+**Steps**:
+1. Have `completeChore` in `chores_provider.dart` return the updated chore (with `pointsAwarded`) and use that value in the success snackbars.
+2. Use `pointsAwarded ?? pointValue` in the completed-card pill.
+3. The pre-completion confirmation sheet may keep the derived value (the award hasn't happened yet) — but source it from a single shared constant map (see TASK-065's dedup) rather than a screen-local copy.
+
+**Acceptance criteria**:
+- [ ] Post-completion UI shows the server's awarded points.
+- [ ] If the backend ever changes the point mapping, no stale client value is displayed after completion.
+
+---
+
+---
+
 ## TASK-068: Backend — Fix Broken Login (500 on Every Request) and Stale Integration Test
 
 **Domain**: Backend  
