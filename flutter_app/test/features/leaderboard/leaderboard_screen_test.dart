@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:chore_app/features/auth/providers/current_user_provider.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
 import 'package:chore_app/features/household/providers/household_provider.dart';
 import 'package:chore_app/features/leaderboard/models/leaderboard_model.dart';
@@ -80,7 +81,7 @@ class _FixedScopeNotifier extends LeaderboardScopeNotifier {
 ///
 /// [leaderboardOverride] controls what the [leaderboardProvider] returns.
 /// [initialScope] sets the active scope tab.
-/// [userId] overrides [currentUserIdProvider].
+/// [userId] overrides [currentUserProvider].
 Widget buildLeaderboardScreen({
   AsyncValue<LeaderboardResult>? leaderboardOverride,
   LeaderboardScope initialScope = LeaderboardScope.allTime,
@@ -127,7 +128,9 @@ Widget buildLeaderboardScreen({
           );
         },
       ),
-      currentUserIdProvider.overrideWithValue(userId),
+      currentUserProvider.overrideWith(
+        (ref) async => UserProfile(id: userId ?? '', displayName: 'Test User'),
+      ),
       leaderboardScopeNotifierProvider.overrideWith(
         () => _FixedScopeNotifier(initialScope),
       ),
@@ -203,7 +206,12 @@ void main() {
                 return _result();
               },
             ),
-            currentUserIdProvider.overrideWithValue(_currentUserId),
+            currentUserProvider.overrideWith(
+              (ref) async => const UserProfile(
+                id: _currentUserId,
+                displayName: 'Test User',
+              ),
+            ),
             householdsNotifierProvider
                 .overrideWith(_FakeHouseholdsNotifier.new),
           ],

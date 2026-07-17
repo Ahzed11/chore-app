@@ -10,14 +10,13 @@ import '../features/chores/models/chore_form_init_data.dart';
 import '../features/chores/screens/chore_list_screen.dart';
 import '../features/chores/screens/create_chore_screen.dart';
 import '../features/chores/screens/my_chores_screen.dart';
-import '../features/household/models/invite_model.dart';
 import '../features/household/providers/pending_join_provider.dart';
 import '../features/household/screens/household_dashboard_screen.dart';
 import '../features/household/screens/household_management_screen.dart';
-import '../features/household/screens/invite_screen.dart';
 import '../features/household/screens/join_invite_screen.dart';
 import '../features/leaderboard/screens/leaderboard_screen.dart';
 import '../features/server/screens/server_setup_screen.dart';
+import '../shared/widgets/splash_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Route name constants
@@ -26,6 +25,7 @@ import '../features/server/screens/server_setup_screen.dart';
 class AppRoutes {
   AppRoutes._();
 
+  static const String splash = 'splash';
   static const String login = 'login';
   static const String register = 'register';
   static const String serverSetup = 'server-setup';
@@ -35,7 +35,6 @@ class AppRoutes {
   static const String leaderboard = 'leaderboard';
   static const String householdManage = 'household-manage';
   static const String createChore = 'create-chore';
-  static const String invite = 'invite';
   static const String joinInvite = 'join-invite';
 }
 
@@ -96,14 +95,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     refreshListenable: appState,
-    initialLocation: '/login',
+    initialLocation: '/splash',
     redirect: (BuildContext context, GoRouterState state) {
       final serverState = ref.read(serverUrlProvider);
+      final isOnSplash = state.matchedLocation == '/splash';
       final isOnServerSetup = state.matchedLocation == '/server-setup';
 
-      // Still resolving the persisted server URL from secure storage.
+      // Still resolving the persisted server URL from secure storage — hold
+      // on the splash screen (TASK-067 F-25) instead of flashing whatever
+      // route happens to render first, only to redirect away a moment later.
       if (serverState.status == ServerUrlStatus.unknown) {
-        return null; // Let through; will refresh once resolved.
+        return isOnSplash ? null : '/splash';
       }
 
       // No server configured yet — first-run setup screen, before login,
@@ -123,9 +125,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // the form or cancel.
       final authState = ref.read(authNotifierProvider);
 
-      // Still resolving token from secure storage.
+      // Still resolving token from secure storage — same cold-start flash
+      // this used to cause on `/login` (TASK-067 F-25).
       if (authState.status == AuthStatus.unknown) {
-        return null; // Let through; will refresh once resolved.
+        return isOnSplash ? null : '/splash';
       }
 
       final isAuthenticated = authState.isAuthenticated;
@@ -136,11 +139,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // Invite deep link (`/join/:token`, TASK-061). An unauthenticated
       // visitor (fresh install, or logged out) can't join yet — stash the
       // token and send them through the normal login/registration flow
-      // first; the `isAuthenticated && isOnAuthRoute` branch below routes
-      // them straight back here once they're signed in. This runs *after*
-      // the unconfigured-server check above, so a deep link opened on a
-      // fresh install already goes server-setup → login/register → join, as
-      // required.
+      // first; the `isAuthenticated && (isOnAuthRoute || isOnSplash)` branch
+      // below routes them straight back here once they're signed in. This
+      // runs *after* the unconfigured-server check above, so a deep link
+      // opened on a fresh install already goes
+      // server-setup → login/register → join, as required.
       final isOnJoinRoute = state.matchedLocation.startsWith('/join/');
       if (isOnJoinRoute && !isAuthenticated) {
         final token = state.pathParameters['token'];
@@ -154,7 +157,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return '/login';
       }
 
-      if (isAuthenticated && isOnAuthRoute) {
+      // Both the ordinary "just logged in from /login or /register" case
+      // and "auth/server status just finished resolving while still sitting
+      // on /splash" land here — either way, an authenticated user shouldn't
+      // stay on either screen.
+      if (isAuthenticated && (isOnAuthRoute || isOnSplash)) {
         final pendingToken = ref.read(pendingJoinTokenProvider);
         if (pendingToken != null) {
           return '/join/$pendingToken';
@@ -165,6 +172,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
+      // Splash — shown only while the persisted server URL / auth token are
+      // being resolved from secure storage; the redirect above always moves
+      // on from here once that resolves.
+      GoRoute(
+        path: '/splash',
+        name: AppRoutes.splash,
+        pageBuilder: (context, state) => _tabPage(state, const SplashScreen()),
+      ),
+
       // Server setup — shown first-run (before login) when no URL is
       // configured, and reachable later to change the server.
       GoRoute(
@@ -181,8 +197,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         name: AppRoutes.login,
-        pageBuilder: (context, state) =>
-            _tabPage(state, const LoginScreen()),
+        pageBuilder: (context, state) => _tabPage(state, const LoginScreen()),
       ),
       GoRoute(
         path: '/register',
@@ -241,22 +256,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           final id = state.pathParameters['householdId']!;
           final initData = state.extra as ChoreFormInitData?;
           return _slidePage(
-              state, CreateChoreScreen(householdId: id, initData: initData));
+            state,
+            CreateChoreScreen(householdId: id, initData: initData),
+          );
         },
       ),
-      GoRoute(
-        path: '/households/:householdId/invite',
-        name: AppRoutes.invite,
-        pageBuilder: (context, state) {
-          final id = state.pathParameters['householdId']!;
-          final extra = state.extra as Map<String, dynamic>?;
-          final initialInvite =
-              extra != null ? InviteResponse.fromJson(extra) : null;
-          return _slidePage(
-              state, InviteScreen(householdId: id, initialInvite: initialInvite));
-        },
-      ),
-
       // Invite deep link — `choreapp:///join/:token` (custom scheme, see
       // `InviteResponse.deepLink`) as well as anyone who pastes the path
       // directly. Only ever rendered while authenticated; see the

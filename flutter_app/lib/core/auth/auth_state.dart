@@ -48,22 +48,25 @@ class AuthStorage {
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
 class AuthState {
-  const AuthState({
-    this.status = AuthStatus.unknown,
-    this.token,
-  });
+  const AuthState({this.status = AuthStatus.unknown, this.token});
 
   final AuthStatus status;
   final String? token;
 
   bool get isAuthenticated => status == AuthStatus.authenticated;
 
-  AuthState copyWith({AuthStatus? status, String? token}) {
+  /// [token] uses the sentinel pattern (see e.g. `AuthFormState.copyWith`)
+  /// rather than `token ?? this.token`: the latter makes it impossible to
+  /// ever *clear* the token via `copyWith` since passing `null` would just
+  /// fall back to the existing value (TASK-067 F-21).
+  AuthState copyWith({AuthStatus? status, Object? token = _sentinel}) {
     return AuthState(
       status: status ?? this.status,
-      token: token ?? this.token,
+      token: token == _sentinel ? this.token : token as String?,
     );
   }
+
+  static const Object _sentinel = Object();
 }
 
 // ---------------------------------------------------------------------------
@@ -112,10 +115,20 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   Future<void> _initialize() async {
-    final token = await AuthStorage.getToken();
-    if (token != null && token.isNotEmpty) {
-      state = AuthState(status: AuthStatus.authenticated, token: token);
-    } else {
+    try {
+      final token = await AuthStorage.getToken();
+      if (token != null && token.isNotEmpty) {
+        state = AuthState(status: AuthStatus.authenticated, token: token);
+      } else {
+        state = const AuthState(status: AuthStatus.unauthenticated);
+      }
+    } catch (_) {
+      // A broken/inaccessible keystore (e.g. `MissingPluginException` in a
+      // test environment with no secure-storage plugin registered, or a
+      // corrupted Android keystore on a real device) should degrade to
+      // logged-out rather than leaving `status` stuck at `unknown` forever —
+      // which, post-TASK-067, would otherwise strand the user on the splash
+      // screen indefinitely (F-20).
       state = const AuthState(status: AuthStatus.unauthenticated);
     }
   }
@@ -130,7 +143,9 @@ class AuthNotifier extends Notifier<AuthState> {
     try {
       final token = await AuthStorage.getToken();
       if (token != null) {
-        await ref.read(authDioProvider).post<void>(
+        await ref
+            .read(authDioProvider)
+            .post<void>(
               ApiEndpoints.authLogout(),
               options: Options(headers: {'Authorization': 'Bearer $token'}),
             );
@@ -160,7 +175,9 @@ class AuthNotifier extends Notifier<AuthState> {
     final refreshToken = await AuthStorage.getRefreshToken();
     if (refreshToken == null) return false;
     try {
-      final response = await ref.read(authDioProvider).post<Map<String, dynamic>>(
+      final response = await ref
+          .read(authDioProvider)
+          .post<Map<String, dynamic>>(
             ApiEndpoints.authRefresh(),
             data: {'refresh_token': refreshToken},
           );
@@ -168,7 +185,10 @@ class AuthNotifier extends Notifier<AuthState> {
       final newAccessToken = data['access_token'] as String;
       await AuthStorage.saveToken(newAccessToken);
       await AuthStorage.saveRefreshToken(data['refresh_token'] as String);
-      state = AuthState(status: AuthStatus.authenticated, token: newAccessToken);
+      state = AuthState(
+        status: AuthStatus.authenticated,
+        token: newAccessToken,
+      );
       return true;
     } on DioException catch (e) {
       final status = e.response?.statusCode;

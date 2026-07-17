@@ -1,3 +1,4 @@
+import 'package:chore_app/features/auth/providers/current_user_provider.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
 import 'package:chore_app/features/household/models/invite_model.dart';
 import 'package:chore_app/features/household/models/member_model.dart';
@@ -5,7 +6,6 @@ import 'package:chore_app/features/household/providers/household_provider.dart';
 import 'package:chore_app/features/household/providers/invite_provider.dart';
 import 'package:chore_app/features/household/providers/members_provider.dart';
 import 'package:chore_app/features/household/screens/household_management_screen.dart';
-import 'package:chore_app/features/leaderboard/providers/leaderboard_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -220,7 +220,10 @@ Widget _buildScreen({
       membersNotifierProvider.overrideWith(
         membersNotifierFactory ?? () => _FakeMembersNotifier(members),
       ),
-      currentUserIdProvider.overrideWithValue(currentUserId),
+      currentUserProvider.overrideWith(
+        (ref) async =>
+            UserProfile(id: currentUserId ?? '', displayName: 'Test User'),
+      ),
       if (inviteApi != null) inviteApiProvider.overrideWithValue(inviteApi),
     ],
     child: MaterialApp.router(

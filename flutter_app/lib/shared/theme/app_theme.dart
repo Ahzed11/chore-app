@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+
+/// The "Outfit" font (TASK-067 F-26) is bundled as a variable font at
+/// `assets/fonts/Outfit-Variable.ttf` and registered under this family name
+/// via `pubspec.yaml`'s `flutter.fonts` — see that file. Flutter maps the
+/// requested `TextStyle.fontWeight` onto the font's `wght` variation axis
+/// automatically, so a single asset covers every weight used below without
+/// any runtime network fetch (the app used to pull each weight from Google
+/// Fonts' CDN via the `google_fonts` package on first run, which meant
+/// LAN-only/offline installs rendered with the system fallback font).
+const _outfit = 'Outfit';
 
 class AppTheme {
   AppTheme._();
@@ -20,57 +29,70 @@ class AppTheme {
       brightness: Brightness.light,
     );
 
-    final base = GoogleFonts.outfitTextTheme().copyWith(
-      displayLarge: GoogleFonts.outfit(
+    final base = ThemeData(brightness: Brightness.light).textTheme
+        .apply(fontFamily: _outfit)
+        .copyWith(
+      displayLarge: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 32,
         fontWeight: FontWeight.bold,
         letterSpacing: -0.5,
         color: _darkText,
       ),
-      displayMedium: GoogleFonts.outfit(
+      displayMedium: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 26,
         fontWeight: FontWeight.bold,
         color: _darkText,
       ),
-      headlineLarge: GoogleFonts.outfit(
+      headlineLarge: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 22,
         fontWeight: FontWeight.w700,
         color: _darkText,
       ),
-      headlineMedium: GoogleFonts.outfit(
+      headlineMedium: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 18,
         fontWeight: FontWeight.w600,
         color: _darkText,
       ),
-      headlineSmall: GoogleFonts.outfit(
+      headlineSmall: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 16,
         fontWeight: FontWeight.w600,
         color: _darkText,
       ),
-      titleLarge: GoogleFonts.outfit(
+      titleLarge: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 16,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.1,
         color: _darkText,
       ),
-      titleMedium: GoogleFonts.outfit(
+      titleMedium: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 14,
         fontWeight: FontWeight.w500,
         color: _darkText,
       ),
-      bodyLarge: GoogleFonts.outfit(
+      bodyLarge: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 16,
         color: _darkText,
       ),
-      bodyMedium: GoogleFonts.outfit(
+      bodyMedium: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 14,
         color: _darkText,
       ),
-      bodySmall: GoogleFonts.outfit(
+      bodySmall: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 12,
-        color: const Color(0xFF7F9794),
+        color: Color(0xFF7F9794),
       ),
-      labelLarge: GoogleFonts.outfit(
+      labelLarge: const TextStyle(
+        fontFamily: _outfit,
         fontSize: 14,
         fontWeight: FontWeight.w600,
         color: _darkText,
@@ -84,18 +106,19 @@ class AppTheme {
       textTheme: base,
 
       // AppBar — white, no elevation, dark text
-      appBarTheme: AppBarTheme(
+      appBarTheme: const AppBarTheme(
         backgroundColor: _surface,
         foregroundColor: _darkText,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
-        titleTextStyle: GoogleFonts.outfit(
+        titleTextStyle: TextStyle(
+          fontFamily: _outfit,
           color: _darkText,
           fontSize: 20,
           fontWeight: FontWeight.w700,
         ),
-        iconTheme: const IconThemeData(color: _darkText),
+        iconTheme: IconThemeData(color: _darkText),
       ),
 
       // Elevated button
@@ -107,7 +130,8 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          textStyle: GoogleFonts.outfit(
+          textStyle: const TextStyle(
+            fontFamily: _outfit,
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
@@ -123,7 +147,8 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          textStyle: GoogleFonts.outfit(
+          textStyle: const TextStyle(
+            fontFamily: _outfit,
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
@@ -139,7 +164,8 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           side: const BorderSide(color: primary),
-          textStyle: GoogleFonts.outfit(
+          textStyle: const TextStyle(
+            fontFamily: _outfit,
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
@@ -150,7 +176,8 @@ class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: primary,
-          textStyle: GoogleFonts.outfit(
+          textStyle: const TextStyle(
+            fontFamily: _outfit,
             fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
@@ -180,8 +207,14 @@ class AppTheme {
           horizontal: 16,
           vertical: 14,
         ),
-        labelStyle: GoogleFonts.outfit(color: const Color(0xFF7F9794)),
-        hintStyle: GoogleFonts.outfit(color: const Color(0xFFA8BCB9)),
+        labelStyle: const TextStyle(
+          fontFamily: _outfit,
+          color: Color(0xFF7F9794),
+        ),
+        hintStyle: const TextStyle(
+          fontFamily: _outfit,
+          color: Color(0xFFA8BCB9),
+        ),
       ),
 
       // Card — no elevation, 18px radius, cards own their margin
@@ -222,7 +255,7 @@ class AppTheme {
       // Chip
       chipTheme: ChipThemeData(
         backgroundColor: const Color(0xFFF1F5F5),
-        labelStyle: GoogleFonts.outfit(fontSize: 13),
+        labelStyle: const TextStyle(fontFamily: _outfit, fontSize: 13),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),

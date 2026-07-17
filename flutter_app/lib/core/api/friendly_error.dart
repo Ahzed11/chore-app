@@ -30,6 +30,10 @@ String friendlyErrorMessage(Object error) {
     case DioExceptionType.sendTimeout:
     case DioExceptionType.receiveTimeout:
     case DioExceptionType.connectionError:
+    case DioExceptionType.transformTimeout:
+      // `transformTimeout` (added in dio 5.10) fires when reading/decoding a
+      // slow response body times out — from the user's point of view this
+      // is the same "couldn't reach the server" story as the other timeouts.
       return _connectionMessage;
 
     case DioExceptionType.badCertificate:
