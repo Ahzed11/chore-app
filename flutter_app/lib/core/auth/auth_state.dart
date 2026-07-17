@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/api_endpoints.dart';
-import '../config/app_config.dart';
+import '../config/server_url_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Secure storage helpers
@@ -71,12 +71,16 @@ class AuthState {
 // ---------------------------------------------------------------------------
 
 /// A bare Dio (no auth interceptor, so no recursion) used for the refresh
-/// and logout endpoints. Timeouts match `api_client.dart`. Overridden in
-/// tests to inject a fake [HttpClientAdapter].
+/// and logout endpoints. Timeouts match `api_client.dart`. baseUrl is
+/// re-read from [serverUrlProvider] on every request via a lightweight
+/// interceptor, so it stays in sync with the configured server without an
+/// app restart — see the longer explanation on `createDioClient` in
+/// `api_client.dart` for why `ref.read` per-request is used here instead of
+/// `ref.watch` at construction. Overridden in tests to inject a fake
+/// [HttpClientAdapter].
 final authDioProvider = Provider<Dio>((ref) {
-  return Dio(
+  final dio = Dio(
     BaseOptions(
-      baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: {
@@ -85,6 +89,15 @@ final authDioProvider = Provider<Dio>((ref) {
       },
     ),
   );
+  dio.interceptors.add(
+    InterceptorsWrapper(
+      onRequest: (options, handler) {
+        options.baseUrl = ref.read(serverUrlProvider).url;
+        handler.next(options);
+      },
+    ),
+  );
+  return dio;
 });
 
 // ---------------------------------------------------------------------------
