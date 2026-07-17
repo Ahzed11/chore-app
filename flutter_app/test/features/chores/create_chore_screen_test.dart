@@ -61,6 +61,26 @@ class _LoadingChoresNotifier extends ChoresNotifier {
       Completer<List<ChoreModel>>().future;
 }
 
+/// Resolves instantly and never hits a real Dio — used by submit-success
+/// tests (TASK-060) so `await notifier.updateChoreDefinition(...)` in
+/// `_submit()` completes within a single `pump()` instead of falling through
+/// to the real, unmocked `dioProvider`.
+class _InstantChoresNotifier extends ChoresNotifier {
+  final List<({String definitionId, Map<String, dynamic> body})> updateCalls =
+      [];
+
+  @override
+  Future<List<ChoreModel>> build(String arg) async => const [];
+
+  @override
+  Future<void> updateChoreDefinition(
+    String definitionId,
+    Map<String, dynamic> body,
+  ) async {
+    updateCalls.add((definitionId: definitionId, body: body));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -291,11 +311,15 @@ void main() {
 
     group('due date validation', () {
       testWidgets(
-          'shows "Due date cannot be in the past" when initData carries a past date',
+          'does NOT show "Due date cannot be in the past" when initData '
+          'carries an unchanged past date (TASK-060)',
           (tester) async {
         // The date picker enforces firstDate=today, but a chore in edit mode
-        // might carry a past date (e.g. clock change, existing stale record).
-        // This verifies the validator catches it on submit.
+        // might carry a past date (e.g. it slipped, or the clock just ticked
+        // over) — the admin must still be able to save it back unchanged
+        // instead of being trapped in a validation error with no way to
+        // clear it (the picker itself can't select a past date to "fix" it
+        // to). See `_dueDateManuallyChanged` in create_chore_screen.dart.
         _expandView(tester);
 
         final pastData = ChoreFormInitData(
@@ -307,14 +331,41 @@ void main() {
           firstDueDate: DateTime(2020, 6, 1), // clearly in the past
         );
 
-        await tester.pumpWidget(_buildScreen(initData: pastData));
+        final notifier = _InstantChoresNotifier();
+        await tester.pumpWidget(
+          _buildScreen(initData: pastData, choresFactory: () => notifier),
+        );
         await tester.pump();
 
-        // Title and category are pre-filled from initData; submit directly.
+        // Title and category are pre-filled from initData; submit directly
+        // without touching the due-date field.
         await tester.tap(find.byKey(const Key('submit_button')));
         await tester.pump();
 
-        expect(find.text('Due date cannot be in the past'), findsOneWidget);
+        expect(find.text('Due date cannot be in the past'), findsNothing);
+        expect(notifier.updateCalls, hasLength(1));
+        expect(notifier.updateCalls.single.body['first_due_date'], '2020-06-01');
+      });
+
+      testWidgets(
+          'create mode (no initData) still rejects a past due date '
+          '(TASK-060 only relaxes edit mode)',
+          (tester) async {
+        // Sanity check for the other half of the branch: create mode has no
+        // `_dueDateManuallyChanged` exemption at all, so nothing here should
+        // have changed for it. There's no UI path to a past date in create
+        // mode (the picker enforces firstDate=today), so this only proves
+        // the validator's `_isEditMode` gate is doing its job — a missing
+        // date still trips its own, separate message.
+        _expandView(tester);
+        await tester.pumpWidget(_buildScreen());
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('submit_button')));
+        await tester.pump();
+
+        expect(find.text('Please select a due date'), findsOneWidget);
+        expect(find.text('Due date cannot be in the past'), findsNothing);
       });
 
       testWidgets('shows date trigger field', (tester) async {

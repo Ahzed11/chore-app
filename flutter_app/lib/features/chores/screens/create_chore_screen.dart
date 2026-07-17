@@ -106,6 +106,14 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
 
   DateTime? _firstDueDate;
 
+  /// Tracks whether the admin has actually tapped through the date picker
+  /// this session, as opposed to `_firstDueDate` merely holding the
+  /// pre-populated edit-mode value untouched. [_pickDate] only ever offers
+  /// today-or-later dates, so a past `_firstDueDate` can only mean "this is
+  /// the original edit-mode value, unchanged" — see the due-date validator
+  /// below (TASK-060).
+  bool _dueDateManuallyChanged = false;
+
   /// `days` | `weeks` | `months`
   String _intervalUnit = 'weeks';
 
@@ -178,6 +186,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
     if (picked != null) {
       setState(() {
         _firstDueDate = picked;
+        _dueDateManuallyChanged = true;
         _dateController.text = DateFormat('EEE, d MMM yyyy').format(picked);
       });
     }
@@ -459,6 +468,16 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
               validator: (_) {
                 if (_firstDueDate == null) {
                   return 'Please select a due date';
+                }
+                // In edit mode, a chore whose due date already passed must
+                // still be saveable unchanged (TASK-060) — `_pickDate` only
+                // ever offers today-or-later dates, so skipping the
+                // past-date check here can only let through the original,
+                // untouched edit-mode value, never a newly-chosen past date.
+                final dateUnchangedInEditMode =
+                    _isEditMode && !_dueDateManuallyChanged;
+                if (dateUnchangedInEditMode) {
+                  return null;
                 }
                 final now = DateTime.now();
                 final today = DateTime(now.year, now.month, now.day);

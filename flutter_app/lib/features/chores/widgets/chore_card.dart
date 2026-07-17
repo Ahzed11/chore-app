@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../router/app_router.dart';
 import '../../household/models/member_model.dart';
+import '../models/chore_form_init_data.dart';
 import '../models/chore_model.dart';
 
 const _teal = Color(0xFF0D9488);
@@ -261,6 +264,22 @@ class ChoreCard extends StatelessWidget {
                   _showMemberPicker(context);
                 },
               ),
+            ListTile(
+              key: const Key('edit_series_menu_item'),
+              leading: const Icon(Icons.edit_outlined, color: _teal),
+              title: const Text(
+                'Edit series',
+                style: TextStyle(color: _teal),
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                context.pushNamed(
+                  AppRoutes.createChore,
+                  pathParameters: {'householdId': chore.householdId},
+                  extra: ChoreFormInitData.fromModel(chore),
+                );
+              },
+            ),
             ListTile(
               key: const Key('delete_series_menu_item'),
               leading: const Icon(Icons.delete_outline, color: Colors.red),
