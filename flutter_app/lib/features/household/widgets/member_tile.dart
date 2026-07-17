@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../models/member_model.dart';
 import '../providers/members_provider.dart';
 
@@ -179,7 +180,7 @@ class _MemberPopupMenu extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to change role: $e'),
+            content: Text('Failed to change role: ${friendlyErrorMessage(e)}'),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -233,7 +234,7 @@ class _MemberPopupMenu extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to remove member: $e'),
+            content: Text('Failed to remove member: ${friendlyErrorMessage(e)}'),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../models/invite_model.dart';
 import '../providers/invite_provider.dart';
 
@@ -72,7 +73,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = e.toString();
+        _error = friendlyErrorMessage(e);
       });
     }
   }
@@ -159,9 +160,13 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(20),
+                // The QR encodes the `choreapp://` deep link (TASK-061) so a
+                // device with the app installed opens straight into the join
+                // flow instead of a browser tab. Share/copy below keep the
+                // `https://` URL — see `InviteResponse.deepLink` for why.
                 child: QrImageView(
                   key: const Key('qr_code'),
-                  data: invite.inviteUrl,
+                  data: invite.deepLink,
                   version: QrVersions.auto,
                   size: 200,
                   backgroundColor: Colors.white,

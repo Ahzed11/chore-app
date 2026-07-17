@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../providers/household_provider.dart';
 
 /// Shows the modal bottom sheet for creating a new household.
@@ -54,9 +55,7 @@ class _CreateHouseholdSheetState extends ConsumerState<CreateHouseholdSheet> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              e.toString().replaceFirst('Exception: ', ''),
-            ),
+            content: Text(friendlyErrorMessage(e)),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );

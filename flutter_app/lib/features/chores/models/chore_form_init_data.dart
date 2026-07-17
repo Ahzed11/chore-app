@@ -1,3 +1,5 @@
+import 'chore_model.dart';
+
 /// Data used to pre-populate [CreateChoreScreen] when it is opened in edit
 /// mode. Carries the chore-definition fields that are editable by an admin.
 ///
@@ -16,6 +18,28 @@ class ChoreFormInitData {
     this.intervalN,
     this.assigneeId,
   });
+
+  /// Builds [ChoreFormInitData] from a chore *instance* (TASK-060) — the
+  /// only shape the app has on hand when the admin long-presses a card in
+  /// the list, since there's no dedicated "fetch chore definition" endpoint.
+  ///
+  /// [ChoreModel] doesn't carry the definition's recurrence rule (interval
+  /// unit/count) — only the instance's own [ChoreModel.dueDate] — so
+  /// [intervalUnit]/[intervalN] are left null here; the form falls back to
+  /// its own defaults ("every 1 week") for those two fields specifically
+  /// when editing a recurring chore. Everything else pre-populates exactly.
+  factory ChoreFormInitData.fromModel(ChoreModel chore) {
+    return ChoreFormInitData(
+      definitionId: chore.definitionId,
+      title: chore.title,
+      description: chore.description,
+      category: chore.category,
+      effortLevel: chore.effortLevel,
+      choreType: chore.choreType,
+      firstDueDate: chore.dueDate,
+      assigneeId: chore.assigneeId,
+    );
+  }
 
   /// The ID of the chore definition being edited (used in the PATCH URL).
   final String definitionId;

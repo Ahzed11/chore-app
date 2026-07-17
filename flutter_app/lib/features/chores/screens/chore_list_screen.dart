@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
@@ -103,7 +104,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
       } catch (e) {
         if (mounted) {
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text('Failed to delete: $e')),
+            SnackBar(content: Text('Failed to delete: ${friendlyErrorMessage(e)}')),
           );
         }
       }
@@ -260,7 +261,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                   loading: () =>
                       const LoadingWidget(message: 'Loading chores...'),
                   error: (error, _) => AppErrorWidget(
-                    message: error.toString(),
+                    error: error,
                     onRetry: () => ref
                         .read(
                           choresNotifierProvider(widget.householdId).notifier,
