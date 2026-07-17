@@ -22,6 +22,12 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
 
+    # The secrets context is not allowed in step-level `if:`; evaluate the
+    # presence check here (where it is allowed) and gate the signing step
+    # on the resulting env var instead.
+    env:
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+
     defaults:
       run:
         working-directory: flutter_app
@@ -52,7 +58,7 @@ jobs:
       # Skipped entirely when the secret isn't set, so forks/PRs without
       # access to repo secrets still build (debug-signed fallback).
       - name: Configure release signing
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
