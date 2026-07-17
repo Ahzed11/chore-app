@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-Completed task bodies (TASK-001–056, 068–080 — 69 tasks) have been moved to
+Completed task bodies (TASK-001–057, 068–080 — 70 tasks) have been moved to
 `docs/archive/tasks-completed.md` to keep this file scannable. Only open work is
 detailed below; the ledger covers the full history.
 
@@ -25,7 +25,8 @@ detailed below; the ledger covers the full history.
 | TASK-045 … TASK-051 | ✅ Done, with follow-up defects fixed by TASK-054+ — archived (TASK-047's logout call was defeated by a caller bug, TASK-050 missed the refresh Dio, TASK-051 only fixed the banner) |
 | TASK-052, TASK-053 | ✅ Done 2026-07-16 — admin chore reassignment UI (member-picker sheet, pending/overdue only) and invite management (list active invites with expiry, revoke, admin-gated) — archived. |
 | TASK-054, TASK-055, TASK-056 | ✅ Done 2026-07-15 — INTERNET permission + cleartext network-security-config; logout ordering fixed; refresh interceptor hardened (retry marker, `/auth/` exclusion, shared-future queueing for concurrent 401s, timeouts) — archived. |
-| TASK-057 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/archive/frontend-report-2026-07-15.md`) |
+| TASK-057 | ✅ Done 2026-07-17 — runtime server URL: first-run setup screen with health-check test, secure-storage persistence, per-request baseUrl injection (no restart needed), change-server entry points on login/dashboard (logs out on change) — archived. |
+| TASK-058 … TASK-067 | ⏳ Open — Flutter tasks from the 2026-07-15 re-review (`docs/archive/frontend-report-2026-07-15.md`) |
 | TASK-068, TASK-069 | ✅ Done 2026-07-15 — login fixed (`expires_delta` restored), stale integration test fixed; CI runs on all branches; ruff in CI; real coverage 95% against the 75% gate. 137/137 tests pass — archived. |
 | TASK-070, TASK-071, TASK-072 | ✅ Done 2026-07-15 — `JWT_EXPIRY_MINUTES=30` (deprecated `JWT_EXPIRY_DAYS` fallback) + `JWT_SECRET` strength validation; chores list ORDER BY + 422 on bad filter params + reassign status guard; idempotent logout, daily expired-token cleanup, refresh-replay revokes the token family, typed `/auth/refresh` response — archived. |
 | TASK-073, TASK-080 | ✅ Done 2026-07-16 — scheduler runs at startup + 6h misfire grace; backfill capped at `GRACE_DAYS` (default 3); one rotation lock per household per run; rotation-pointer modulo bug fixed; invite-accept row lock; test suite 2:46 → ~1:10 — archived. |
@@ -35,30 +36,6 @@ detailed below; the ledger covers the full history.
 
 ---
 
-## TASK-057: Flutter — Runtime Server URL Configuration
-
-**Domain**: Flutter  
-**Priority**: High — headline feature for self-hosting  
-**Depends on**: TASK-054  
-**Source**: `docs/archive/frontend-report-2026-07-15.md` F-7
-
-`lib/core/config/app_config.dart:4-7` reads `API_BASE_URL` at compile time (`String.fromEnvironment`), defaulting to the Android emulator's `http://10.0.2.2:8000`. A user installing the CI-built APK has no way to point the app at their own server — every household would need a custom build.
-
-**Steps**:
-1. Create a `ServerConfig` storage (e.g. `shared_preferences` or reuse `flutter_secure_storage`) holding the base URL; fall back to the compile-time value when unset.
-2. Add a "Server" setup screen shown on first run when no URL is stored (before login), with a text field, and a "Test connection" action that calls `GET /health` (`ApiEndpoints.health` already exists, currently unused) and shows success/failure.
-3. Make `dioProvider` (and the auxiliary Dio instances in `auth_state.dart`) derive `baseUrl` from a `serverUrlProvider` so changing the URL takes effect without an app restart.
-4. Add an entry point to change the server URL later (e.g. from the login screen's overflow menu or a settings row on the dashboard). Changing it should log the user out (tokens are server-specific).
-5. Validate input: require scheme, strip trailing slash.
-6. Widget tests: first-run shows the setup screen; valid health check proceeds to login; invalid URL shows an error.
-
-**Acceptance criteria**:
-- [ ] Fresh install prompts for a server URL before login.
-- [ ] URL persists across restarts and is used by all API calls including refresh/logout.
-- [ ] Connection test gives clear success/failure feedback.
-- [ ] The URL can be changed later without reinstalling.
-
----
 ## TASK-058: Flutter — Fetch All Chore Pages (List Truncated at 50)
 
 **Domain**: Flutter  

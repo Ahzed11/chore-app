@@ -1452,6 +1452,33 @@ The refresh interceptor in `lib/core/api/api_client.dart:37-63` has three defect
 - [ ] All new interceptor tests pass.
 
 ---
+## TASK-057: Flutter — Runtime Server URL Configuration
+
+**Domain**: Flutter  
+**Priority**: High — headline feature for self-hosting  
+**Depends on**: TASK-054  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-7
+
+`lib/core/config/app_config.dart:4-7` reads `API_BASE_URL` at compile time (`String.fromEnvironment`), defaulting to the Android emulator's `http://10.0.2.2:8000`. A user installing the CI-built APK has no way to point the app at their own server — every household would need a custom build.
+
+**Steps**:
+1. Create a `ServerConfig` storage (e.g. `shared_preferences` or reuse `flutter_secure_storage`) holding the base URL; fall back to the compile-time value when unset.
+2. Add a "Server" setup screen shown on first run when no URL is stored (before login), with a text field, and a "Test connection" action that calls `GET /health` (`ApiEndpoints.health` already exists, currently unused) and shows success/failure.
+3. Make `dioProvider` (and the auxiliary Dio instances in `auth_state.dart`) derive `baseUrl` from a `serverUrlProvider` so changing the URL takes effect without an app restart.
+4. Add an entry point to change the server URL later (e.g. from the login screen's overflow menu or a settings row on the dashboard). Changing it should log the user out (tokens are server-specific).
+5. Validate input: require scheme, strip trailing slash.
+6. Widget tests: first-run shows the setup screen; valid health check proceeds to login; invalid URL shows an error.
+
+**Acceptance criteria**:
+- [ ] Fresh install prompts for a server URL before login.
+- [ ] URL persists across restarts and is used by all API calls including refresh/logout.
+- [ ] Connection test gives clear success/failure feedback.
+- [ ] The URL can be changed later without reinstalling.
+
+---
+
+---
+
 ## TASK-068: Backend — Fix Broken Login (500 on Every Request) and Stale Integration Test
 
 **Domain**: Backend  

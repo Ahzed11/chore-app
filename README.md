@@ -83,14 +83,14 @@ build artifact (not a GitHub Release):
 2. Install it on an Android device (you'll need to allow installs from
    unknown sources, since it isn't distributed through the Play Store).
 
-**Current limitation**: the app's API base URL
-(`flutter_app/lib/core/config/app_config.dart`) is a compile-time value
-(`API_BASE_URL`, defaulting to `http://10.0.2.2:8000`, the Android emulator's
-loopback address). CI builds the APK without overriding it, so the
-CI-built APK will **not** work against your server as-is — it will try to
-reach the emulator loopback address. Until in-app runtime server
-configuration ships (see `docs/tasks.md` TASK-057), point the app at your
-server by building it yourself with the flag set to your server's URL:
+On first launch the app asks for your server's URL (e.g.
+`https://chores.example.com`) and tests the connection before continuing;
+you can change it later from the settings icon on the login and dashboard
+screens. No custom build is needed — the CI-built APK works against any
+server.
+
+For development builds, the compile-time default
+(`flutter_app/lib/core/config/app_config.dart`) can still be overridden:
 
 ```bash
 cd flutter_app
