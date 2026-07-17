@@ -83,6 +83,34 @@ class Settings(BaseSettings):
     RATE_LIMIT_REGISTER: str = "10/hour"
     RATE_LIMIT_REFRESH: str = "30/minute"
 
+    # Chore reminder notifications (TASK-081): optional push of a daily
+    # due/overdue summary via a self-hostable ntfy or Gotify server. The
+    # feature is entirely disabled — no network calls, no extra queries — when
+    # NOTIFY_URL is unset, which is also the default so existing deployments
+    # see no behavior change.
+    #
+    # NOTIFY_URL:
+    #   - ntfy: the full topic URL to POST to, e.g. https://ntfy.sh/my-topic
+    #     or https://ntfy.example.com/chores.
+    #   - gotify: the base server URL, e.g. https://gotify.example.com — the
+    #     app appends /message itself.
+    # NOTIFY_TOKEN: optional. ntfy sends it as a Bearer Authorization header
+    #   (needed for access-controlled topics); Gotify sends it as the
+    #   `token` query parameter on POST /message (an application token).
+    # NOTIFY_KIND: which backend's request shape to use.
+    NOTIFY_URL: str | None = None
+    NOTIFY_TOKEN: str | None = None
+    NOTIFY_KIND: str = "ntfy"
+    NOTIFY_TIMEOUT_SECONDS: float = 5.0
+
+    @field_validator("NOTIFY_KIND")
+    @classmethod
+    def _validate_notify_kind(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ("ntfy", "gotify"):
+            raise ValueError('NOTIFY_KIND must be "ntfy" or "gotify"')
+        return normalized
+
     @field_validator("JWT_SECRET")
     @classmethod
     def _validate_jwt_secret(cls, value: str) -> str:

@@ -17,9 +17,12 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
+from app.models.household import Household
 from app.models.refresh_token import RefreshToken
 from app.models.revoked_token import RevokedToken
+from app.models.user import User
 from app.services.assignment import AssignmentService, RoundRobinStrategy
+from app.services.notifications import HouseholdReminderSummary, send_daily_reminders
 
 logger = structlog.get_logger()
 
@@ -192,14 +195,19 @@ async def generate_chore_instances(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def flag_overdue_instances(session: AsyncSession) -> None:
+async def flag_overdue_instances(session: AsyncSession) -> list[uuid.UUID]:
     """Batch-update pending ChoreInstances whose due_date has already passed.
 
     Only rows with ``status='pending'`` are touched.  Instances that are
     ``'complete'`` or ``'cancelled'`` are never modified.
+
+    Returns the ids of the instances that were flagged *in this call* (i.e.
+    just transitioned pending -> overdue) — used by the notification step
+    (TASK-081) to distinguish "newly overdue" from instances that were
+    already overdue before this run.
     """
     today = _today()
-    await session.execute(
+    result = await session.execute(
         update(ChoreInstance)
         .where(
             ChoreInstance.status == "pending",
@@ -207,7 +215,9 @@ async def flag_overdue_instances(session: AsyncSession) -> None:
         )
         .values(status="overdue")
         .execution_options(synchronize_session=False)
+        .returning(ChoreInstance.id)
     )
+    return [row[0] for row in result.all()]
 
 
 async def cleanup_expired_tokens(session: AsyncSession) -> None:
@@ -233,6 +243,67 @@ async def cleanup_expired_tokens(session: AsyncSession) -> None:
     )
 
 
+async def _gather_reminder_summaries(
+    session: AsyncSession, newly_overdue_ids: list[uuid.UUID]
+) -> list[HouseholdReminderSummary]:
+    """Build per-household due-today/newly-overdue summaries (TASK-081).
+
+    Only called when ``NOTIFY_URL`` is configured, so a disabled feature
+    costs zero extra queries.  Must run *before* ``session.commit()`` so it
+    sees the statuses ``flag_overdue_instances`` just wrote in this same
+    transaction (that update uses ``synchronize_session=False``, so a fresh
+    SELECT — not the ORM identity map — is what reflects it).
+    """
+    today = _today()
+
+    base_query = (
+        select(
+            ChoreInstance.household_id,
+            Household.name,
+            ChoreDefinition.title,
+            User.display_name,
+        )
+        .select_from(ChoreInstance)
+        .join(Household, ChoreInstance.household_id == Household.id)
+        .outerjoin(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
+        .outerjoin(User, ChoreInstance.assignee_id == User.id)
+    )
+
+    due_today_rows = (
+        await session.execute(
+            base_query.where(
+                ChoreInstance.status == "pending",
+                ChoreInstance.due_date == today,
+            )
+        )
+    ).all()
+
+    overdue_rows: list = []
+    if newly_overdue_ids:
+        overdue_rows = (
+            await session.execute(base_query.where(ChoreInstance.id.in_(newly_overdue_ids)))
+        ).all()
+
+    summaries: dict[uuid.UUID, HouseholdReminderSummary] = {}
+
+    def _summary_for(household_id: uuid.UUID, household_name: str) -> HouseholdReminderSummary:
+        if household_id not in summaries:
+            summaries[household_id] = HouseholdReminderSummary(
+                household_id=household_id, household_name=household_name
+            )
+        return summaries[household_id]
+
+    for household_id, household_name, chore_title, assignee_name in due_today_rows:
+        summary = _summary_for(household_id, household_name)
+        summary.due_today.append((chore_title or "Chore", assignee_name or "Unassigned"))
+
+    for household_id, household_name, chore_title, assignee_name in overdue_rows:
+        summary = _summary_for(household_id, household_name)
+        summary.newly_overdue.append((chore_title or "Chore", assignee_name or "Unassigned"))
+
+    return list(summaries.values())
+
+
 async def run_daily_job() -> None:
     """Open a database session, run both scheduler tasks, and commit.
 
@@ -245,6 +316,7 @@ async def run_daily_job() -> None:
     the application is deployed with multiple Uvicorn workers.
     """
     logger.info("scheduler.daily_job.started")
+    reminder_summaries: list[HouseholdReminderSummary] = []
     async with AsyncSessionLocal() as session:
         # Try to acquire advisory lock — only one worker runs the job.
         # The lock is held for the duration of the transaction and released
@@ -259,14 +331,29 @@ async def run_daily_job() -> None:
 
         try:
             await generate_chore_instances(session)
-            await flag_overdue_instances(session)
+            newly_overdue_ids = await flag_overdue_instances(session)
             await cleanup_expired_tokens(session)
+
+            # Gather notification data (TASK-081) *inside* the transaction —
+            # before commit — so it reflects this run's changes. The actual
+            # HTTP delivery happens after commit, below, outside the advisory
+            # lock: a slow/unreachable notify endpoint must never hold the
+            # lock open and block other workers.
+            if settings.NOTIFY_URL:
+                reminder_summaries = await _gather_reminder_summaries(session, newly_overdue_ids)
+
             await session.commit()
             logger.info("scheduler.daily_job.completed")
         except Exception:
             await session.rollback()
             logger.exception("Daily scheduler job failed; all changes rolled back")
             raise
+
+    # Best-effort: delivery failures are caught and logged inside
+    # send_daily_reminders and must never fail the job (they run after the
+    # job's own commit has already succeeded).
+    if reminder_summaries:
+        await send_daily_reminders(reminder_summaries)
 
 
 # ---------------------------------------------------------------------------

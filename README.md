@@ -189,6 +189,71 @@ Restoring onto a completely fresh volume (e.g. after disk loss): start only
 `db` (`docker compose -f docker-compose.prod.yml up -d db`), wait for it to
 report healthy, run the `pg_restore` command above, then start `api`.
 
+## Chore reminder notifications
+
+The nightly scheduler job can push a summary notification per household —
+chores due today and chores that just became overdue, with assignee names —
+via [ntfy](https://ntfy.sh) or [Gotify](https://gotify.net), two self-hostable
+push services. This is entirely optional: it's off by default and stays off
+until you set `NOTIFY_URL`.
+
+**Option 1: the public ntfy.sh instance (fastest to try).** Pick a hard-to-guess
+topic name and set in `.env`:
+
+```bash
+NOTIFY_URL=https://ntfy.sh/choreapp-<something-random>
+```
+
+Then subscribe from the phone: install the [ntfy Android
+app](https://play.google.com/store/apps/details?id=io.heckel.ntfy), add the
+same topic. No `NOTIFY_TOKEN` is needed for a public, unauthenticated topic
+— anyone who knows the topic name can read it, so keep it random or self-host
+instead for anything sensitive.
+
+**Option 2: self-hosted ntfy alongside the stack.** Add an `ntfy` service to
+`docker-compose.prod.yml` (or your own compose override):
+
+```yaml
+  ntfy:
+    image: binwiederhier/ntfy
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ntfy_data:/var/cache/ntfy
+```
+
+then point the backend at it and put it behind the same reverse proxy as the
+API (see [HTTPS / reverse proxy](#https--reverse-proxy)) so the phone app can
+reach it from outside your LAN:
+
+```bash
+NOTIFY_URL=https://ntfy.example.com/choreapp
+```
+
+**Option 3: Gotify.** Run a Gotify server, create an application in its
+admin UI to get an app token, then set:
+
+```bash
+NOTIFY_URL=https://gotify.example.com
+NOTIFY_TOKEN=<the application token>
+NOTIFY_KIND=gotify
+```
+
+(`NOTIFY_KIND` defaults to `ntfy`; the backend builds a different request
+shape for each — a plain-text POST with a `Title` header for ntfy, a JSON
+POST to `/message?token=...` for Gotify.) `NOTIFY_TOKEN` is also honored for
+ntfy, as a Bearer `Authorization` header, for topics with access control
+enabled.
+
+All households currently share the single configured topic/server (a
+notification's title names the household so multiple households sharing a
+topic stay distinguishable) — see `.env.example` for the full list of
+`NOTIFY_*` variables. Delivery failures are logged and never fail the nightly
+job — a broken or unreachable notify endpoint never blocks chore instance
+generation.
+
 ## Development setup
 
 Requires Podman (or Docker — see below) with the Compose plugin, and the

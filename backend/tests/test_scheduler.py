@@ -9,20 +9,27 @@ Covers:
 - flag_overdue_instances: leaves 'complete' and 'cancelled' instances untouched
 - flag_overdue_instances: leaves future pending instances as 'pending'
 - combined workflow: generate then flag produces expected status transitions
+- TASK-081: flag_overdue_instances returns newly-flagged ids; reminder summary
+  gathering; run_daily_job sends/skips notifications and survives delivery
+  failures.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
+import httpx
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.config import settings
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
 from app.models.household import Household
 from app.models.household_membership import HouseholdMembership
 from app.models.user import User
 from app.tasks.scheduler import flag_overdue_instances, generate_chore_instances
+from tests.conftest import get_test_database_url, truncate_all_tables
 
 # ---------------------------------------------------------------------------
 # Constants and builder helpers
@@ -603,3 +610,286 @@ async def test_generation_uses_single_household_lock_per_run(
     for inst in instances:
         per_member[inst.assignee_id] += 1
     assert per_member == {user.id: 8, user_b.id: 8}
+
+
+# ---------------------------------------------------------------------------
+# TASK-081: notification summary gathering
+# ---------------------------------------------------------------------------
+
+
+async def test_flag_overdue_returns_newly_flagged_ids(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """flag_overdue_instances returns exactly the ids it transitioned this call."""
+    household = _make_household()
+    user = _make_user()
+    await _flush(db_session, household, user)
+
+    fake_today = date(2024, 1, 10)
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: fake_today)
+
+    definition = _make_recurring_definition(
+        household.id, fake_today, {"interval_unit": "days", "interval_n": 1}
+    )
+    await _flush(db_session, definition)
+
+    newly_overdue = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today - timedelta(days=1),
+        status="pending",
+    )
+    already_complete = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today - timedelta(days=2),
+        status="complete",
+    )
+    still_future = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today + timedelta(days=1),
+        status="pending",
+    )
+    await _flush(db_session, newly_overdue, already_complete, still_future)
+
+    flagged_ids = await flag_overdue_instances(db_session)
+
+    assert flagged_ids == [newly_overdue.id]
+
+    # A second run flags nothing new — the instance is already 'overdue', not 'pending'.
+    flagged_again = await flag_overdue_instances(db_session)
+    assert flagged_again == []
+
+
+async def test_gather_reminder_summaries_due_today_and_newly_overdue(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks.scheduler import _gather_reminder_summaries
+
+    household = _make_household()
+    user = _make_user()
+    user.display_name = "Alice"
+    await _flush(db_session, household, user)
+
+    fake_today = date(2024, 1, 10)
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: fake_today)
+
+    definition = _make_recurring_definition(
+        household.id, fake_today, {"interval_unit": "days", "interval_n": 1}
+    )
+    definition.title = "Vacuum"
+    await _flush(db_session, definition)
+
+    due_today = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today,
+        status="pending",
+    )
+    now_overdue = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today - timedelta(days=1),
+        status="overdue",  # already transitioned by flag_overdue_instances
+    )
+    unrelated_future = ChoreInstance(
+        id=uuid.uuid4(),
+        definition_id=definition.id,
+        household_id=household.id,
+        assignee_id=user.id,
+        due_date=fake_today + timedelta(days=3),
+        status="pending",
+    )
+    await _flush(db_session, due_today, now_overdue, unrelated_future)
+
+    summaries = await _gather_reminder_summaries(db_session, [now_overdue.id])
+
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.household_id == household.id
+    assert summary.household_name == household.name
+    assert summary.due_today == [("Vacuum", "Alice")]
+    assert summary.newly_overdue == [("Vacuum", "Alice")]
+
+
+async def test_gather_reminder_summaries_empty_when_nothing_due(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks.scheduler import _gather_reminder_summaries
+
+    monkeypatch.setattr("app.tasks.scheduler._today", lambda: _FAKE_TODAY)
+
+    summaries = await _gather_reminder_summaries(db_session, [])
+
+    assert summaries == []
+
+
+# ---------------------------------------------------------------------------
+# TASK-081: run_daily_job notification integration
+#
+# run_daily_job opens its own AsyncSessionLocal rather than accepting a
+# session, so these tests patch app.tasks.scheduler.AsyncSessionLocal to a
+# session factory bound to the real test database (same pattern as
+# tests/test_cli.py's _run_reset helper) instead of using the db_session
+# fixture's rolled-back transaction.
+# ---------------------------------------------------------------------------
+
+
+async def test_run_daily_job_sends_one_notification_per_household(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = get_test_database_url()
+    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
+    await truncate_all_tables(engine)
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        household = _make_household()
+        user = _make_user()
+        user.display_name = "Alice"
+        async with session_factory() as seed_session:
+            await _flush(seed_session, household, user)
+            await _flush(seed_session, _make_membership(household.id, user.id))
+            definition = _make_recurring_definition(
+                household.id, _FAKE_TODAY, {"interval_unit": "days", "interval_n": 1}
+            )
+            definition.title = "Vacuum"
+            await _flush(seed_session, definition)
+            await seed_session.commit()
+
+        monkeypatch.setattr("app.tasks.scheduler._today", lambda: _FAKE_TODAY)
+        monkeypatch.setattr(settings, "NOTIFY_URL", "https://ntfy.example.com/chores")
+        monkeypatch.setattr(settings, "NOTIFY_KIND", "ntfy")
+        monkeypatch.setattr(settings, "NOTIFY_TOKEN", None)
+
+        captured: list[tuple] = []
+
+        async def fake_post(self, url, **kwargs):
+            captured.append((url, kwargs))
+            return httpx.Response(200, request=httpx.Request("POST", url))
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        with patch("app.tasks.scheduler.AsyncSessionLocal", session_factory):
+            from app.tasks.scheduler import run_daily_job
+
+            await run_daily_job()
+
+        assert len(captured) == 1
+        notified_url, kwargs = captured[0]
+        assert notified_url == "https://ntfy.example.com/chores"
+        assert b"Vacuum" in kwargs["content"]
+        assert household.name.encode("utf-8") in kwargs["headers"]["Title"]
+
+        # generate_chore_instances still ran and committed as normal.
+        async with session_factory() as check_session:
+            result = await check_session.execute(
+                select(ChoreInstance).where(ChoreInstance.household_id == household.id)
+            )
+            assert len(result.scalars().all()) == 8  # today .. today+7 daily
+    finally:
+        await truncate_all_tables(engine)
+        await engine.dispose()
+
+
+async def test_run_daily_job_skips_notification_when_notify_url_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = get_test_database_url()
+    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
+    await truncate_all_tables(engine)
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        household = _make_household()
+        user = _make_user()
+        async with session_factory() as seed_session:
+            await _flush(seed_session, household, user)
+            await _flush(seed_session, _make_membership(household.id, user.id))
+            definition = _make_recurring_definition(
+                household.id, _FAKE_TODAY, {"interval_unit": "days", "interval_n": 1}
+            )
+            await _flush(seed_session, definition)
+            await seed_session.commit()
+
+        monkeypatch.setattr("app.tasks.scheduler._today", lambda: _FAKE_TODAY)
+        monkeypatch.setattr(settings, "NOTIFY_URL", None)
+
+        async def unexpected_post(self, *args, **kwargs):
+            raise AssertionError("no HTTP calls should be made when NOTIFY_URL is unset")
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", unexpected_post)
+
+        with patch("app.tasks.scheduler.AsyncSessionLocal", session_factory):
+            from app.tasks.scheduler import run_daily_job
+
+            await run_daily_job()  # must not raise, must not call httpx
+
+        async with session_factory() as check_session:
+            result = await check_session.execute(
+                select(ChoreInstance).where(ChoreInstance.household_id == household.id)
+            )
+            assert len(result.scalars().all()) == 8
+    finally:
+        await truncate_all_tables(engine)
+        await engine.dispose()
+
+
+async def test_run_daily_job_survives_notification_delivery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance criterion: notification failure never aborts instance generation."""
+    url = get_test_database_url()
+    engine = create_async_engine(url, echo=False, pool_pre_ping=True)
+    await truncate_all_tables(engine)
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    try:
+        household = _make_household()
+        user = _make_user()
+        async with session_factory() as seed_session:
+            await _flush(seed_session, household, user)
+            await _flush(seed_session, _make_membership(household.id, user.id))
+            definition = _make_recurring_definition(
+                household.id, _FAKE_TODAY, {"interval_unit": "days", "interval_n": 1}
+            )
+            await _flush(seed_session, definition)
+            await seed_session.commit()
+
+        monkeypatch.setattr("app.tasks.scheduler._today", lambda: _FAKE_TODAY)
+        monkeypatch.setattr(settings, "NOTIFY_URL", "https://ntfy.example.com/chores")
+
+        async def failing_post(self, *args, **kwargs):
+            raise httpx.ConnectError("notify server unreachable")
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", failing_post)
+
+        with patch("app.tasks.scheduler.AsyncSessionLocal", session_factory):
+            from app.tasks.scheduler import run_daily_job
+
+            await run_daily_job()  # must not raise despite the notify failure
+
+        async with session_factory() as check_session:
+            result = await check_session.execute(
+                select(ChoreInstance).where(ChoreInstance.household_id == household.id)
+            )
+            # Instance generation committed successfully before the (failed)
+            # notification attempt, which happens after commit.
+            assert len(result.scalars().all()) == 8
+    finally:
+        await truncate_all_tables(engine)
+        await engine.dispose()
