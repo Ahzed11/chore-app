@@ -6,9 +6,11 @@ import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/api/friendly_error.dart';
+import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/avatar_colors.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
-import '../../leaderboard/providers/leaderboard_provider.dart';
+import '../../auth/providers/current_user_provider.dart';
 import '../models/household_model.dart';
 import '../models/member_model.dart';
 import '../models/invite_model.dart';
@@ -25,21 +27,6 @@ const _darkText = Color(0xFF0F2E2C);
 const _secondaryText = Color(0xFF8AA19E);
 const _bgPage = Color(0xFFF4F8F7);
 const _borderCard = Color(0xFFEBF1F0);
-
-const List<Color> _avatarColors = [
-  Color(0xFF14B8A6),
-  Color(0xFF0EA5E9),
-  Color(0xFF8B5CF6),
-  Color(0xFF22C55E),
-  Color(0xFFF472B6),
-  Color(0xFFF97316),
-  Color(0xFF0D9488),
-];
-
-Color _avatarColor(String name) {
-  if (name.isEmpty) return _avatarColors[0];
-  return _avatarColors[name.codeUnitAt(0) % _avatarColors.length];
-}
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -85,8 +72,9 @@ class _HouseholdManagementScreenState
   Future<void> _generateInvite() async {
     setState(() => _generatingInvite = true);
     try {
-      final inv =
-          await ref.read(inviteApiProvider).generateInvite(widget.householdId);
+      final inv = await ref
+          .read(inviteApiProvider)
+          .generateInvite(widget.householdId);
       if (mounted) {
         setState(() {
           _inviteResponse = inv;
@@ -101,7 +89,9 @@ class _HouseholdManagementScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to generate invite: ${friendlyErrorMessage(e)}'),
+            content: Text(
+              'Failed to generate invite: ${friendlyErrorMessage(e)}',
+            ),
           ),
         );
       }
@@ -124,7 +114,9 @@ class _HouseholdManagementScreenState
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(
-            content: Text('Failed to revoke invite: ${friendlyErrorMessage(e)}'),
+            content: Text(
+              'Failed to revoke invite: ${friendlyErrorMessage(e)}',
+            ),
           ),
         );
       }
@@ -206,7 +198,9 @@ class _HouseholdManagementScreenState
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Failed to leave household: ${friendlyErrorMessage(e)}'),
+          content: Text(
+            'Failed to leave household: ${friendlyErrorMessage(e)}',
+          ),
         ),
       );
     }
@@ -220,11 +214,9 @@ class _HouseholdManagementScreenState
   Widget build(BuildContext context) {
     final householdsAsync = ref.watch(householdsNotifierProvider);
     final membersAsync = ref.watch(membersNotifierProvider(widget.householdId));
-    final currentUserId = ref.watch(currentUserIdProvider);
+    final currentUserId = ref.watch(currentUserProvider).valueOrNull?.id;
 
-    final household = householdsAsync.valueOrNull
-        ?.where((h) => h.id == widget.householdId)
-        .firstOrNull;
+    final household = ref.watch(householdByIdProvider(widget.householdId));
 
     if (householdsAsync.isLoading) {
       return const Scaffold(backgroundColor: _bgPage, body: LoadingWidget());
@@ -247,81 +239,92 @@ class _HouseholdManagementScreenState
           children: [
             _buildHeader(context),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(22, 20, 22, 40),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _HeroCard(
-                      household: household,
-                      members: members,
-                      isEditingName: _isEditingName,
-                      nameController: _nameController,
-                      onStartEdit: () {
-                        _nameController.text = household.name;
-                        setState(() => _isEditingName = true);
-                      },
-                      onSaveEdit: () async {
-                        final newName = _nameController.text.trim();
-                        if (newName.isEmpty || newName == household.name) {
-                          setState(() => _isEditingName = false);
-                          return;
-                        }
-                        final messenger = ScaffoldMessenger.of(context);
-                        try {
-                          await ref
-                              .read(householdsNotifierProvider.notifier)
-                              .updateHouseholdName(
-                                widget.householdId,
-                                newName,
-                              );
-                          if (mounted) setState(() => _isEditingName = false);
-                        } catch (e) {
-                          // Leave the edit UI open (and the previous name,
-                          // since nothing here is optimistically mutated) so
-                          // the admin sees the failure and can retry instead
-                          // of silently losing their edit.
-                          if (mounted) {
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Failed to rename household: '
-                                  '${friendlyErrorMessage(e)}',
-                                ),
-                              ),
-                            );
+              child: RefreshIndicator(
+                color: _teal,
+                onRefresh: () async {
+                  ref.invalidate(membersNotifierProvider(widget.householdId));
+                  ref.invalidate(householdsNotifierProvider);
+                  await ref.read(
+                    membersNotifierProvider(widget.householdId).future,
+                  );
+                },
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(22, 20, 22, 40),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _HeroCard(
+                        household: household,
+                        members: members,
+                        isEditingName: _isEditingName,
+                        nameController: _nameController,
+                        onStartEdit: () {
+                          _nameController.text = household.name;
+                          setState(() => _isEditingName = true);
+                        },
+                        onSaveEdit: () async {
+                          final newName = _nameController.text.trim();
+                          if (newName.isEmpty || newName == household.name) {
+                            setState(() => _isEditingName = false);
+                            return;
                           }
-                        }
-                      },
-                      onCancelEdit: () =>
-                          setState(() => _isEditingName = false),
-                    ),
-                    const SizedBox(height: 26),
-                    membersAsync.when(
-                      loading: () => const LoadingWidget(),
-                      error: (error, _) => AppErrorWidget(
-                        error: error,
-                        onRetry: () => ref.invalidate(
-                          membersNotifierProvider(widget.householdId),
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await ref
+                                .read(householdsNotifierProvider.notifier)
+                                .updateHouseholdName(
+                                  widget.householdId,
+                                  newName,
+                                );
+                            if (mounted) setState(() => _isEditingName = false);
+                          } catch (e) {
+                            // Leave the edit UI open (and the previous name,
+                            // since nothing here is optimistically mutated) so
+                            // the admin sees the failure and can retry instead
+                            // of silently losing their edit.
+                            if (mounted) {
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Failed to rename household: '
+                                    '${friendlyErrorMessage(e)}',
+                                  ),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                        onCancelEdit: () =>
+                            setState(() => _isEditingName = false),
+                      ),
+                      const SizedBox(height: 26),
+                      membersAsync.when(
+                        loading: () => const LoadingWidget(),
+                        error: (error, _) => AppErrorWidget(
+                          error: error,
+                          onRetry: () => ref.invalidate(
+                            membersNotifierProvider(widget.householdId),
+                          ),
+                        ),
+                        data: (memberList) => _MembersSection(
+                          members: memberList,
+                          householdId: widget.householdId,
+                          currentUserId: currentUserId,
+                          isAdmin: household.isAdmin,
                         ),
                       ),
-                      data: (memberList) => _MembersSection(
-                        members: memberList,
-                        householdId: widget.householdId,
-                        currentUserId: currentUserId,
-                        isAdmin: household.isAdmin,
-                      ),
-                    ),
-                    // Invite generation/listing/revocation are admin-only on
-                    // the backend (`require_admin`); hide the whole section
-                    // from non-admin members rather than surfacing 403s.
-                    if (household.isAdmin) ...[
+                      // Invite generation/listing/revocation are admin-only on
+                      // the backend (`require_admin`); hide the whole section
+                      // from non-admin members rather than surfacing 403s.
+                      if (household.isAdmin) ...[
+                        const SizedBox(height: 26),
+                        _buildInviteSection(),
+                      ],
                       const SizedBox(height: 26),
-                      _buildInviteSection(),
+                      _buildDangerZone(),
                     ],
-                    const SizedBox(height: 26),
-                    _buildDangerZone(),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -340,8 +343,12 @@ class _HouseholdManagementScreenState
       ),
       child: Row(
         children: [
-          GestureDetector(
+          AccessibleTap(
             onTap: () => context.pop(),
+            label: 'Back',
+            customBorder: const CircleBorder(),
+            naturalSize: 40,
+            minTapSize: 48,
             child: Container(
               width: 40,
               height: 40,
@@ -397,9 +404,13 @@ class _HouseholdManagementScreenState
           clipBehavior: Clip.hardEdge,
           child: Column(
             children: [
-              GestureDetector(
+              AccessibleTap(
                 key: const Key('invite_tile'),
                 onTap: _toggleInvite,
+                label: _inviteOpen
+                    ? 'Invite a housemate, collapse'
+                    : 'Invite a housemate, expand',
+                selected: _inviteOpen,
                 child: Container(
                   color: Colors.white,
                   padding: const EdgeInsets.all(16),
@@ -461,8 +472,9 @@ class _HouseholdManagementScreenState
                 // Only build (and therefore only start watching `invitesProvider`,
                 // which triggers the GET request) once the section is actually
                 // opened — avoids fetching invites the admin never looks at.
-                secondChild:
-                    _inviteOpen ? _buildInviteExpanded() : const SizedBox.shrink(),
+                secondChild: _inviteOpen
+                    ? _buildInviteExpanded()
+                    : const SizedBox.shrink(),
                 crossFadeState: _inviteOpen
                     ? CrossFadeState.showSecond
                     : CrossFadeState.showFirst,
@@ -488,10 +500,7 @@ class _HouseholdManagementScreenState
           // this session — older ones fall back to metadata-only rows below.
           if (_inviteResponse != null) ...[
             Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 11,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               decoration: BoxDecoration(
                 color: const Color(0xFFF4F8F7),
                 border: Border.all(color: const Color(0xFFE6EDEC)),
@@ -550,8 +559,10 @@ class _HouseholdManagementScreenState
               ),
             ),
             const SizedBox(height: 14),
-            GestureDetector(
+            AccessibleTap(
               onTap: _copyInviteLink,
+              label: _copied ? 'Link copied' : 'Copy invite link',
+              borderRadius: BorderRadius.circular(12),
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -584,9 +595,13 @@ class _HouseholdManagementScreenState
           ],
 
           // ---- Generate new invite (explicit user action only) ------------
-          GestureDetector(
+          AccessibleTap(
             key: const Key('generate_invite_button'),
             onTap: _generatingInvite ? null : _generateInvite,
+            label: _inviteResponse == null
+                ? 'Generate invite link'
+                : 'Generate new invite link',
+            borderRadius: BorderRadius.circular(12),
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -608,8 +623,7 @@ class _HouseholdManagementScreenState
                       ),
                     )
                   else
-                    const Icon(Icons.add_link_rounded,
-                        size: 18, color: _teal),
+                    const Icon(Icons.add_link_rounded, size: 18, color: _teal),
                   const SizedBox(width: 8),
                   Text(
                     _inviteResponse == null
@@ -644,10 +658,7 @@ class _HouseholdManagementScreenState
           invitesAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
-              child: CircularProgressIndicator(
-                color: _teal,
-                strokeWidth: 2,
-              ),
+              child: CircularProgressIndicator(color: _teal, strokeWidth: 2),
             ),
             error: (error, _) => Padding(
               key: const Key('invites_error'),
@@ -756,9 +767,11 @@ class _HouseholdManagementScreenState
                 ],
               ),
               const SizedBox(height: 15),
-              GestureDetector(
+              AccessibleTap(
                 key: const Key('leave_household_button'),
                 onTap: _confirmLeave,
+                label: 'Leave household',
+                borderRadius: BorderRadius.circular(12),
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 12),
@@ -905,9 +918,13 @@ class _HeroCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               if (!isEditingName)
-                GestureDetector(
+                AccessibleTap(
                   key: const Key('edit_name_button'),
                   onTap: onStartEdit,
+                  label: 'Edit household name',
+                  borderRadius: BorderRadius.circular(11),
+                  naturalSize: 38,
+                  minTapSize: 48,
                   child: Container(
                     width: 38,
                     height: 38,
@@ -929,8 +946,10 @@ class _HeroCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: GestureDetector(
+                  child: AccessibleTap(
                     onTap: onSaveEdit,
+                    label: 'Save household name',
+                    borderRadius: BorderRadius.circular(11),
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
@@ -951,8 +970,10 @@ class _HeroCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 9),
                 Expanded(
-                  child: GestureDetector(
+                  child: AccessibleTap(
                     onTap: onCancelEdit,
+                    label: 'Cancel editing household name',
+                    borderRadius: BorderRadius.circular(11),
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
@@ -1023,29 +1044,31 @@ class _MemberAvatarStack extends StatelessWidget {
       child: Stack(
         children: [
           ...show.asMap().entries.map(
-                (e) => Positioned(
-                  left: e.key * 20.0,
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _avatarColor(e.value.displayName),
-                      border: Border.all(color: _teal, width: 2),
-                    ),
-                    child: Center(
-                      child: Text(
-                        e.value.displayName[0].toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+            (e) => Positioned(
+              left: e.key * 20.0,
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: avatarColorForName(e.value.displayName),
+                  border: Border.all(color: _teal, width: 2),
+                ),
+                child: Center(
+                  child: Text(
+                    e.value.displayName.isNotEmpty
+                        ? e.value.displayName[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
               ),
+            ),
+          ),
           if (extra > 0)
             Positioned(
               left: show.length * 20.0,
@@ -1184,11 +1207,13 @@ class _MemberRow extends ConsumerWidget {
             height: 42,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: _avatarColor(member.displayName),
+              color: avatarColorForName(member.displayName),
             ),
             child: Center(
               child: Text(
-                member.displayName[0].toUpperCase(),
+                member.displayName.isNotEmpty
+                    ? member.displayName[0].toUpperCase()
+                    : '?',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 16,
@@ -1220,10 +1245,7 @@ class _MemberRow extends ConsumerWidget {
                       const _YouPill(),
                     ],
                     const SizedBox(width: 7),
-                    _RolePill(
-                      isAdmin: member.isAdmin,
-                      userId: member.userId,
-                    ),
+                    _RolePill(isAdmin: member.isAdmin, userId: member.userId),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -1239,10 +1261,14 @@ class _MemberRow extends ConsumerWidget {
             ),
           ),
           if (canManage)
-            GestureDetector(
+            AccessibleTap(
               key: Key('member_menu_${member.userId}'),
               onTap: () =>
                   _showMemberActions(context, ref, member, householdId),
+              label: 'More actions for ${member.displayName}',
+              borderRadius: BorderRadius.circular(9),
+              naturalSize: 32,
+              minTapSize: 48,
               child: Container(
                 width: 32,
                 height: 32,
@@ -1317,9 +1343,7 @@ class _RolePill extends StatelessWidget {
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w800,
-          color: isAdmin
-              ? const Color(0xFF92600A)
-              : const Color(0xFF8AA19E),
+          color: isAdmin ? const Color(0xFF92600A) : const Color(0xFF8AA19E),
         ),
       ),
     );
@@ -1378,7 +1402,9 @@ void _showMemberActions(
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: ${friendlyErrorMessage(e)}')),
+                    SnackBar(
+                      content: Text('Failed: ${friendlyErrorMessage(e)}'),
+                    ),
                   );
                 }
               }
@@ -1386,8 +1412,7 @@ void _showMemberActions(
           ),
           ListTile(
             key: const Key('remove_member_action'),
-            leading:
-                const Icon(Icons.person_remove_rounded, color: Colors.red),
+            leading: const Icon(Icons.person_remove_rounded, color: Colors.red),
             title: const Text(
               'Remove from household',
               style: TextStyle(color: Colors.red),
@@ -1410,9 +1435,7 @@ void _showMemberActions(
                     TextButton(
                       key: const Key('remove_confirm_button'),
                       onPressed: () => Navigator.pop(ctx, true),
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.red,
-                      ),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
                       child: const Text('Remove'),
                     ),
                   ],
@@ -1435,7 +1458,9 @@ void _showMemberActions(
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: ${friendlyErrorMessage(e)}')),
+                    SnackBar(
+                      content: Text('Failed: ${friendlyErrorMessage(e)}'),
+                    ),
                   );
                 }
               }
@@ -1470,8 +1495,7 @@ class _InviteTokenRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expiresAt = invite.expiresAt.toLocal();
-    final isExpiringSoon =
-        expiresAt.difference(DateTime.now()).inHours < 24;
+    final isExpiringSoon = expiresAt.difference(DateTime.now()).inHours < 24;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -1512,9 +1536,13 @@ class _InviteTokenRow extends StatelessWidget {
               ],
             ),
           ),
-          GestureDetector(
+          AccessibleTap(
             key: Key('revoke_invite_${invite.id}'),
             onTap: onRevoke,
+            label: 'Revoke invite',
+            borderRadius: BorderRadius.circular(9),
+            naturalSize: 32,
+            minTapSize: 48,
             child: Container(
               width: 32,
               height: 32,

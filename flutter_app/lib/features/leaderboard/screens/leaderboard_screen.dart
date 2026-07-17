@@ -4,8 +4,11 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../router/app_router.dart';
+import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/avatar_colors.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
+import '../../auth/providers/current_user_provider.dart';
 import '../../household/providers/household_provider.dart';
 import '../models/leaderboard_model.dart';
 import '../providers/leaderboard_provider.dart';
@@ -19,21 +22,6 @@ const _darkText = Color(0xFF0F2E2C);
 const _secondaryText = Color(0xFF7F9794);
 const _mutedText = Color(0xFF9FB6B3);
 const _borderLight = Color(0xFFE6EDEC);
-
-const List<Color> _avatarColors = [
-  Color(0xFF14B8A6),
-  Color(0xFF0EA5E9),
-  Color(0xFF8B5CF6),
-  Color(0xFF22C55E),
-  Color(0xFFF472B6),
-  Color(0xFFF97316),
-  Color(0xFF0D9488),
-];
-
-Color _avatarColor(String name) {
-  if (name.isEmpty) return _avatarColors[0];
-  return _avatarColors[name.codeUnitAt(0) % _avatarColors.length];
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,7 +39,9 @@ String _rangeLabel(LeaderboardScope scope, LeaderboardResult? result) {
       return 'This Week';
     case LeaderboardScope.thisMonth:
       if (result.monthStart != null) {
-        return DateFormat('MMMM yyyy').format(DateTime.parse(result.monthStart!));
+        return DateFormat(
+          'MMMM yyyy',
+        ).format(DateTime.parse(result.monthStart!));
       }
       return 'This Month';
     case LeaderboardScope.allTime:
@@ -83,14 +73,8 @@ class LeaderboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scope = ref.watch(leaderboardScopeNotifierProvider);
     final leaderboardAsync = ref.watch(leaderboardProvider(householdId));
-    final currentUserId = ref.watch(currentUserIdProvider);
-    final bool isAdmin = ref
-            .watch(householdsNotifierProvider)
-            .valueOrNull
-            ?.where((h) => h.id == householdId)
-            .firstOrNull
-            ?.isAdmin ??
-        false;
+    final currentUserId = ref.watch(currentUserProvider).valueOrNull?.id;
+    final bool isAdmin = ref.watch(isAdminProvider(householdId));
 
     return PopScope(
       canPop: false,
@@ -112,8 +96,9 @@ class LeaderboardScreen extends ConsumerWidget {
               ),
               _PeriodPicker(
                 scope: scope,
-                onScopeChanged: (s) =>
-                    ref.read(leaderboardScopeNotifierProvider.notifier).setScope(s),
+                onScopeChanged: (s) => ref
+                    .read(leaderboardScopeNotifierProvider.notifier)
+                    .setScope(s),
               ),
               _RangeLabel(scope: scope, leaderboardAsync: leaderboardAsync),
               Expanded(
@@ -172,7 +157,8 @@ class _LeaderboardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final standing = leaderboardAsync.whenOrNull(
+    final standing =
+        leaderboardAsync.whenOrNull(
           data: (result) => _computeStanding(result, currentUserId),
         ) ??
         'Loading…';
@@ -208,11 +194,15 @@ class _LeaderboardHeader extends StatelessWidget {
             ),
           ),
           if (isAdmin)
-            GestureDetector(
+            AccessibleTap(
               onTap: () => context.pushNamed(
                 AppRoutes.householdManage,
                 pathParameters: {'householdId': householdId},
               ),
+              label: 'Manage household members',
+              customBorder: const CircleBorder(),
+              naturalSize: 40,
+              minTapSize: 48,
               child: Container(
                 width: 40,
                 height: 40,
@@ -221,8 +211,11 @@ class _LeaderboardHeader extends StatelessWidget {
                   border: Border.all(color: _borderLight),
                   color: Colors.white,
                 ),
-                child:
-                    const Icon(Icons.group_rounded, size: 20, color: _darkText),
+                child: const Icon(
+                  Icons.group_rounded,
+                  size: 20,
+                  color: _darkText,
+                ),
               ),
             ),
         ],
@@ -288,8 +281,11 @@ class _PeriodButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: GestureDetector(
+      child: AccessibleTap(
         onTap: onTap,
+        label: label,
+        selected: isActive,
+        borderRadius: BorderRadius.circular(11),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(vertical: 9),
@@ -302,7 +298,7 @@ class _PeriodButton extends StatelessWidget {
                       color: Color(0x40133E3A),
                       blurRadius: 6,
                       offset: Offset(0, 2),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -495,7 +491,7 @@ class _Podium extends StatelessWidget {
                   pedestalHeight: 74,
                   pedestalGradient: const [
                     Color(0xFFEEF4F3),
-                    Color(0xFFE3EDEB)
+                    Color(0xFFE3EDEB),
                   ],
                   pedestalNumColor: const Color(0xFF9AA8A6),
                   pedestalNumSize: 26,
@@ -510,10 +506,7 @@ class _Podium extends StatelessWidget {
 
           // 1st
           p1 != null
-              ? _PodiumSlotFirst(
-                  entry: p1,
-                  currentUserId: currentUserId,
-                )
+              ? _PodiumSlotFirst(entry: p1, currentUserId: currentUserId)
               : const SizedBox(width: 106),
 
           const SizedBox(width: 8),
@@ -529,7 +522,7 @@ class _Podium extends StatelessWidget {
                   pedestalHeight: 58,
                   pedestalGradient: const [
                     Color(0xFFF5ECE4),
-                    Color(0xFFEADDD0)
+                    Color(0xFFEADDD0),
                   ],
                   pedestalNumColor: const Color(0xFFB78A63),
                   pedestalNumSize: 24,
@@ -579,10 +572,12 @@ class _PodiumSlotFirst extends StatelessWidget {
                     width: 68,
                     height: 68,
                     decoration: BoxDecoration(
-                      color: _avatarColor(entry.displayName),
+                      color: avatarColorForName(entry.displayName),
                       shape: BoxShape.circle,
-                      border:
-                          Border.all(color: const Color(0xFFFBBF24), width: 3),
+                      border: Border.all(
+                        color: const Color(0xFFFBBF24),
+                        width: 3,
+                      ),
                       boxShadow: const [
                         BoxShadow(
                           color: Color(0xCCFBBF24),
@@ -616,10 +611,7 @@ class _PodiumSlotFirst extends StatelessWidget {
                   ),
                 ],
               ),
-              if (isYou) ...[
-                const SizedBox(height: 4),
-                _YouPill(),
-              ],
+              if (isYou) ...[const SizedBox(height: 4), _YouPill()],
             ],
           ),
 
@@ -736,7 +728,7 @@ class _PodiumSlot extends StatelessWidget {
                 width: avatarSize,
                 height: avatarSize,
                 decoration: BoxDecoration(
-                  color: _avatarColor(entry.displayName),
+                  color: avatarColorForName(entry.displayName),
                   shape: BoxShape.circle,
                   border: Border.all(color: borderColor, width: 3),
                 ),
@@ -753,10 +745,7 @@ class _PodiumSlot extends StatelessWidget {
                   ),
                 ),
               ),
-              if (isYou) ...[
-                const SizedBox(height: 4),
-                _YouPill(),
-              ],
+              if (isYou) ...[const SizedBox(height: 4), _YouPill()],
             ],
           ),
 
@@ -802,8 +791,9 @@ class _PodiumSlot extends StatelessWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
               ),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(14)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(14),
+              ),
             ),
             child: Align(
               alignment: Alignment.topCenter,
@@ -891,8 +881,7 @@ class _InviteNudge extends StatelessWidget {
               color: Color(0xFFD8F0EC),
               shape: BoxShape.circle,
             ),
-            child:
-                const Icon(Icons.group_add_rounded, color: _teal, size: 24),
+            child: const Icon(Icons.group_add_rounded, color: _teal, size: 24),
           ),
           const SizedBox(height: 11),
           Text(
@@ -919,15 +908,14 @@ class _InviteNudge extends StatelessWidget {
           TextButton(
             onPressed: isAdmin
                 ? () => context.pushNamed(
-                      AppRoutes.householdManage,
-                      pathParameters: {'householdId': householdId},
-                    )
+                    AppRoutes.householdManage,
+                    pathParameters: {'householdId': householdId},
+                  )
                 : null,
             style: TextButton.styleFrom(
               backgroundColor: _teal,
               foregroundColor: Colors.white,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
               shape: const StadiumBorder(),
             ),
             child: const Row(
@@ -968,14 +956,11 @@ class _RestList extends StatelessWidget {
         final isYou = e.userId == currentUserId;
         return Container(
           margin: const EdgeInsets.only(top: 10),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
           decoration: BoxDecoration(
             color: isYou ? const Color(0xFFEAFAF7) : Colors.white,
             border: Border.all(
-              color: isYou
-                  ? const Color(0xFFBCE7DF)
-                  : const Color(0xFFEBF1F0),
+              color: isYou ? const Color(0xFFBCE7DF) : const Color(0xFFEBF1F0),
             ),
             borderRadius: BorderRadius.circular(16),
           ),
@@ -1014,10 +999,7 @@ class _RestList extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (isYou) ...[
-                          const SizedBox(width: 7),
-                          _YouPill(),
-                        ],
+                        if (isYou) ...[const SizedBox(width: 7), _YouPill()],
                       ],
                     ),
                     Text(
@@ -1052,11 +1034,7 @@ class _RestList extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({
-    required this.name,
-    this.size = 40,
-    this.fontSize = 15,
-  });
+  const _Avatar({required this.name, this.size = 40, this.fontSize = 15});
 
   final String name;
   final double size;
@@ -1069,7 +1047,7 @@ class _Avatar extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: _avatarColor(name),
+        color: avatarColorForName(name),
         shape: BoxShape.circle,
       ),
       child: Center(
