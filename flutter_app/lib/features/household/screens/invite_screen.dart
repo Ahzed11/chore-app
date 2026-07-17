@@ -159,9 +159,13 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(20),
+                // The QR encodes the `choreapp://` deep link (TASK-061) so a
+                // device with the app installed opens straight into the join
+                // flow instead of a browser tab. Share/copy below keep the
+                // `https://` URL — see `InviteResponse.deepLink` for why.
                 child: QrImageView(
                   key: const Key('qr_code'),
-                  data: invite.inviteUrl,
+                  data: invite.deepLink,
                   version: QrVersions.auto,
                   size: 200,
                   backgroundColor: Colors.white,

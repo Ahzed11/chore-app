@@ -499,8 +499,13 @@ class _HouseholdManagementScreenState
                   border: Border.all(color: const Color(0xFFE6EDEC)),
                   borderRadius: BorderRadius.circular(16),
                 ),
+                // The QR encodes the `choreapp://` deep link (TASK-061) so a
+                // device with the app installed opens straight into the
+                // join flow instead of a browser tab. The URL row above and
+                // "Copy invite link" below keep the `https://` URL — see
+                // `InviteResponse.deepLink` for why.
                 child: QrImageView(
-                  data: _inviteResponse!.inviteUrl,
+                  data: _inviteResponse!.deepLink,
                   version: QrVersions.auto,
                   size: 160,
                   eyeStyle: const QrEyeStyle(

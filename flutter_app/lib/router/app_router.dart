@@ -11,9 +11,11 @@ import '../features/chores/screens/chore_list_screen.dart';
 import '../features/chores/screens/create_chore_screen.dart';
 import '../features/chores/screens/my_chores_screen.dart';
 import '../features/household/models/invite_model.dart';
+import '../features/household/providers/pending_join_provider.dart';
 import '../features/household/screens/household_dashboard_screen.dart';
 import '../features/household/screens/household_management_screen.dart';
 import '../features/household/screens/invite_screen.dart';
+import '../features/household/screens/join_invite_screen.dart';
 import '../features/leaderboard/screens/leaderboard_screen.dart';
 import '../features/server/screens/server_setup_screen.dart';
 
@@ -34,6 +36,7 @@ class AppRoutes {
   static const String householdManage = 'household-manage';
   static const String createChore = 'create-chore';
   static const String invite = 'invite';
+  static const String joinInvite = 'join-invite';
 }
 
 // ---------------------------------------------------------------------------
@@ -130,11 +133,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           state.matchedLocation == '/login' ||
           state.matchedLocation == '/register';
 
+      // Invite deep link (`/join/:token`, TASK-061). An unauthenticated
+      // visitor (fresh install, or logged out) can't join yet — stash the
+      // token and send them through the normal login/registration flow
+      // first; the `isAuthenticated && isOnAuthRoute` branch below routes
+      // them straight back here once they're signed in. This runs *after*
+      // the unconfigured-server check above, so a deep link opened on a
+      // fresh install already goes server-setup → login/register → join, as
+      // required.
+      final isOnJoinRoute = state.matchedLocation.startsWith('/join/');
+      if (isOnJoinRoute && !isAuthenticated) {
+        final token = state.pathParameters['token'];
+        if (token != null && token.isNotEmpty) {
+          ref.read(pendingJoinTokenProvider.notifier).stash(token);
+        }
+        return '/login';
+      }
+
       if (!isAuthenticated && !isOnAuthRoute) {
         return '/login';
       }
 
       if (isAuthenticated && isOnAuthRoute) {
+        final pendingToken = ref.read(pendingJoinTokenProvider);
+        if (pendingToken != null) {
+          return '/join/$pendingToken';
+        }
         return '/households';
       }
 
@@ -230,6 +254,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               extra != null ? InviteResponse.fromJson(extra) : null;
           return _slidePage(
               state, InviteScreen(householdId: id, initialInvite: initialInvite));
+        },
+      ),
+
+      // Invite deep link — `choreapp:///join/:token` (custom scheme, see
+      // `InviteResponse.deepLink`) as well as anyone who pastes the path
+      // directly. Only ever rendered while authenticated; see the
+      // `isOnJoinRoute` handling in `redirect` above for the logged-out case.
+      GoRoute(
+        path: '/join/:token',
+        name: AppRoutes.joinInvite,
+        pageBuilder: (context, state) {
+          final token = state.pathParameters['token']!;
+          return _tabPage(state, JoinInviteScreen(token: token));
         },
       ),
     ],
