@@ -2,7 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_state.dart';
-import '../config/app_config.dart';
+import '../config/server_url_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Dio instance factory
@@ -17,7 +17,6 @@ Dio createDioClient(Ref ref) {
 
   final dio = Dio(
     BaseOptions(
-      baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: {
@@ -27,11 +26,24 @@ Dio createDioClient(Ref ref) {
     ),
   );
 
-  // Auth interceptor – attaches Bearer token to every outgoing request and,
-  // on 401, performs a single shared refresh then retries the request once.
+  // Auth interceptor – sets the current server baseUrl and attaches the
+  // Bearer token to every outgoing request, and on 401 performs a single
+  // shared refresh then retries the request once.
+  //
+  // baseUrl is deliberately re-read from serverUrlProvider on every request
+  // (via `ref.read`, not baked into BaseOptions at construction) rather than
+  // via `ref.watch` on this provider: `RequestOptions.uri` recomputes from
+  // `options.baseUrl` + `options.path` on every access (see dio's
+  // `options.dart`), so mutating it per-request is enough to pick up a
+  // changed server URL immediately. `ref.watch` here would instead rebuild
+  // this whole Provider — which invalidates the `ref` captured by these
+  // interceptor closures for their remaining lifetime and crashes on the
+  // next deferred `ref.read` (Riverpod's "outdated ref" assertion) as soon
+  // as serverUrlProvider's initial async load resolves.
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
+        options.baseUrl = ref.read(serverUrlProvider).url;
         final token = await AuthStorage.getToken();
         if (token != null && token.isNotEmpty) {
           options.headers['Authorization'] = 'Bearer $token';

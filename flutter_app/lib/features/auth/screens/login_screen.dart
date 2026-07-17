@@ -42,6 +42,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            key: const Key('login_server_settings_button'),
+            icon: const Icon(Icons.dns_outlined),
+            tooltip: 'Server settings',
+            onPressed: () => goToChangeServer(context),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

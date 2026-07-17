@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_state.dart';
+import '../../../router/app_router.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../providers/household_provider.dart';
@@ -25,6 +26,13 @@ class HouseholdDashboardScreen extends ConsumerWidget {
             icon: const Icon(Icons.link_rounded),
             tooltip: 'Join by invite link',
             onPressed: () => _showJoinDialog(context, ref),
+          ),
+          // Server settings button
+          IconButton(
+            key: const Key('dashboard_server_settings_button'),
+            icon: const Icon(Icons.dns_outlined),
+            tooltip: 'Server settings',
+            onPressed: () => goToChangeServer(context),
           ),
           // Logout button
           IconButton(

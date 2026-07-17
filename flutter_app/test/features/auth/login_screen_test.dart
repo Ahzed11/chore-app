@@ -205,4 +205,16 @@ void main() {
       );
     });
   });
+
+  group('LoginScreen – server settings entry point', () {
+    testWidgets('renders a server settings button in the app bar',
+        (tester) async {
+      await tester.pumpWidget(buildLoginScreen());
+
+      expect(
+        find.byKey(const Key('login_server_settings_button')),
+        findsOneWidget,
+      );
+    });
+  });
 }

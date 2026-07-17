@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/auth/auth_state.dart';
+import '../core/config/server_url_provider.dart';
 import '../features/auth/screens/login_screen.dart';
 import '../features/auth/screens/register_screen.dart';
 import '../features/chores/models/chore_form_init_data.dart';
@@ -14,6 +15,7 @@ import '../features/household/screens/household_dashboard_screen.dart';
 import '../features/household/screens/household_management_screen.dart';
 import '../features/household/screens/invite_screen.dart';
 import '../features/leaderboard/screens/leaderboard_screen.dart';
+import '../features/server/screens/server_setup_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Route name constants
@@ -24,6 +26,7 @@ class AppRoutes {
 
   static const String login = 'login';
   static const String register = 'register';
+  static const String serverSetup = 'server-setup';
   static const String households = 'households';
   static const String choreList = 'chore-list';
   static const String myChores = 'my-chores';
@@ -31,6 +34,17 @@ class AppRoutes {
   static const String householdManage = 'household-manage';
   static const String createChore = 'create-chore';
   static const String invite = 'invite';
+}
+
+// ---------------------------------------------------------------------------
+// Navigation helpers
+// ---------------------------------------------------------------------------
+
+/// Navigates to the server-setup screen so the user can point the app at a
+/// different server. Unlike the mandatory first-run redirect, this shows a
+/// cancel button (`canCancel: true`) since a server is already configured.
+void goToChangeServer(BuildContext context) {
+  context.pushNamed(AppRoutes.serverSetup, extra: const {'canCancel': true});
 }
 
 // ---------------------------------------------------------------------------
@@ -73,13 +87,37 @@ Page<void> _slidePage(GoRouterState state, Widget child) {
 // ---------------------------------------------------------------------------
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  // Listenable that triggers router refresh when auth state changes.
-  final authNotifier = _AuthStateListenable(ref);
+  // Listenable that triggers router refresh when auth or server-config
+  // state changes.
+  final appState = _AppStateListenable(ref);
 
   return GoRouter(
-    refreshListenable: authNotifier,
+    refreshListenable: appState,
     initialLocation: '/login',
     redirect: (BuildContext context, GoRouterState state) {
+      final serverState = ref.read(serverUrlProvider);
+      final isOnServerSetup = state.matchedLocation == '/server-setup';
+
+      // Still resolving the persisted server URL from secure storage.
+      if (serverState.status == ServerUrlStatus.unknown) {
+        return null; // Let through; will refresh once resolved.
+      }
+
+      // No server configured yet — first-run setup screen, before login,
+      // regardless of auth state.
+      if (serverState.status == ServerUrlStatus.unconfigured) {
+        return isOnServerSetup ? null : '/server-setup';
+      }
+
+      // Server is configured — fall through to the usual auth-route
+      // redirects below. These already do the right thing for
+      // `/server-setup` without a special case: an unauthenticated user who
+      // just finished first-run setup (or just changed servers, which logs
+      // them out) is bounced to `/login` same as any other non-auth route;
+      // an authenticated user who voluntarily navigated here to change the
+      // server (and hasn't submitted yet) is authenticated + not on an auth
+      // route, so neither branch fires and they're left alone to fill in
+      // the form or cancel.
       final authState = ref.read(authNotifierProvider);
 
       // Still resolving token from secure storage.
@@ -103,6 +141,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
+      // Server setup — shown first-run (before login) when no URL is
+      // configured, and reachable later to change the server.
+      GoRoute(
+        path: '/server-setup',
+        name: AppRoutes.serverSetup,
+        pageBuilder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>?;
+          final canCancel = extra?['canCancel'] == true;
+          return _tabPage(state, ServerSetupScreen(canCancel: canCancel));
+        },
+      ),
+
       // Auth routes — simple fade so the login↔register transition isn't jarring
       GoRoute(
         path: '/login',
@@ -187,22 +237,28 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 });
 
 // ---------------------------------------------------------------------------
-// Auth state change listenable (bridges Riverpod -> GoRouter refresh)
+// App state change listenable (bridges Riverpod -> GoRouter refresh)
 // ---------------------------------------------------------------------------
 
-class _AuthStateListenable extends ChangeNotifier {
-  _AuthStateListenable(Ref ref) {
-    _subscription = ref.listen<AuthState>(
+class _AppStateListenable extends ChangeNotifier {
+  _AppStateListenable(Ref ref) {
+    _authSubscription = ref.listen<AuthState>(
       authNotifierProvider,
+      (_, __) => notifyListeners(),
+    );
+    _serverSubscription = ref.listen<ServerUrlState>(
+      serverUrlProvider,
       (_, __) => notifyListeners(),
     );
   }
 
-  late final ProviderSubscription<AuthState> _subscription;
+  late final ProviderSubscription<AuthState> _authSubscription;
+  late final ProviderSubscription<ServerUrlState> _serverSubscription;
 
   @override
   void dispose() {
-    _subscription.close();
+    _authSubscription.close();
+    _serverSubscription.close();
     super.dispose();
   }
 }
