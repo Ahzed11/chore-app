@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../../../features/household/providers/household_provider.dart';
 import '../../../features/household/providers/members_provider.dart';
 import '../models/chore_form_init_data.dart';
@@ -247,7 +248,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(e.toString()),
+            content: Text(friendlyErrorMessage(e)),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );

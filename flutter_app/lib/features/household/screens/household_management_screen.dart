@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../../leaderboard/providers/leaderboard_provider.dart';
@@ -99,7 +100,9 @@ class _HouseholdManagementScreenState
       if (mounted) setState(() => _generatingInvite = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate invite: $e')),
+          SnackBar(
+            content: Text('Failed to generate invite: ${friendlyErrorMessage(e)}'),
+          ),
         );
       }
     }
@@ -120,7 +123,9 @@ class _HouseholdManagementScreenState
     } catch (e) {
       if (mounted) {
         messenger.showSnackBar(
-          SnackBar(content: Text('Failed to revoke invite: $e')),
+          SnackBar(
+            content: Text('Failed to revoke invite: ${friendlyErrorMessage(e)}'),
+          ),
         );
       }
     }
@@ -200,7 +205,9 @@ class _HouseholdManagementScreenState
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text('Failed to leave household: $e')),
+        SnackBar(
+          content: Text('Failed to leave household: ${friendlyErrorMessage(e)}'),
+        ),
       );
     }
   }
@@ -256,12 +263,35 @@ class _HouseholdManagementScreenState
                       },
                       onSaveEdit: () async {
                         final newName = _nameController.text.trim();
-                        if (newName.isNotEmpty && newName != household.name) {
+                        if (newName.isEmpty || newName == household.name) {
+                          setState(() => _isEditingName = false);
+                          return;
+                        }
+                        final messenger = ScaffoldMessenger.of(context);
+                        try {
                           await ref
                               .read(householdsNotifierProvider.notifier)
-                              .updateHouseholdName(widget.householdId, newName);
+                              .updateHouseholdName(
+                                widget.householdId,
+                                newName,
+                              );
+                          if (mounted) setState(() => _isEditingName = false);
+                        } catch (e) {
+                          // Leave the edit UI open (and the previous name,
+                          // since nothing here is optimistically mutated) so
+                          // the admin sees the failure and can retry instead
+                          // of silently losing their edit.
+                          if (mounted) {
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Failed to rename household: '
+                                  '${friendlyErrorMessage(e)}',
+                                ),
+                              ),
+                            );
+                          }
                         }
-                        setState(() => _isEditingName = false);
                       },
                       onCancelEdit: () =>
                           setState(() => _isEditingName = false),
@@ -270,7 +300,7 @@ class _HouseholdManagementScreenState
                     membersAsync.when(
                       loading: () => const LoadingWidget(),
                       error: (error, _) => AppErrorWidget(
-                        message: error.toString(),
+                        error: error,
                         onRetry: () => ref.invalidate(
                           membersNotifierProvider(widget.householdId),
                         ),
@@ -623,7 +653,7 @@ class _HouseholdManagementScreenState
               key: const Key('invites_error'),
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
-                'Failed to load invites: $error',
+                'Failed to load invites: ${friendlyErrorMessage(error)}',
                 style: const TextStyle(fontSize: 12.5, color: Colors.red),
               ),
             ),
@@ -1348,7 +1378,7 @@ void _showMemberActions(
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: $e')),
+                    SnackBar(content: Text('Failed: ${friendlyErrorMessage(e)}')),
                   );
                 }
               }
@@ -1405,7 +1435,7 @@ void _showMemberActions(
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed: $e')),
+                    SnackBar(content: Text('Failed: ${friendlyErrorMessage(e)}')),
                   );
                 }
               }

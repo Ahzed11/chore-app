@@ -75,7 +75,7 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
           child: choresAsync.when(
             loading: () => const LoadingWidget(message: 'Loading your chores…'),
             error: (error, _) => AppErrorWidget(
-              message: error.toString(),
+              error: error,
               onRetry: () => ref
                   .read(choresNotifierProvider(widget.householdId).notifier)
                   .refresh(),

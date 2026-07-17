@@ -128,7 +128,7 @@ class LeaderboardScreen extends ConsumerWidget {
                     ),
                     error: (error, _) => AppErrorWidget(
                       key: const Key('error_widget'),
-                      message: error.toString(),
+                      error: error,
                       onRetry: () =>
                           ref.invalidate(leaderboardProvider(householdId)),
                     ),

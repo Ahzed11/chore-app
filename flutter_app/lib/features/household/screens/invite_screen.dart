@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../models/invite_model.dart';
 import '../providers/invite_provider.dart';
 
@@ -72,7 +73,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = e.toString();
+        _error = friendlyErrorMessage(e);
       });
     }
   }
