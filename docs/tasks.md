@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-Completed task bodies (TASK-001–059, 063, 064, 068–080 — 74 tasks) have been moved to
+Completed task bodies (TASK-001–059, 063, 064, 068–081 — 75 tasks) have been moved to
 `docs/archive/tasks-completed.md` to keep this file scannable. Only open work is
 detailed below; the ledger covers the full history.
 
@@ -35,7 +35,7 @@ detailed below; the ledger covers the full history.
 | TASK-073, TASK-080 | ✅ Done 2026-07-16 — scheduler runs at startup + 6h misfire grace; backfill capped at `GRACE_DAYS` (default 3); one rotation lock per household per run; rotation-pointer modulo bug fixed; invite-accept row lock; test suite 2:46 → ~1:10 — archived. |
 | TASK-074, TASK-075, TASK-076 | ✅ Done 2026-07-16 — `docker-compose.prod.yml` (GHCR image, migrations-on-start entrypoint); daily `pg_dump` backup sidecar + `make backup`/`make restore`; root `README.md` self-hosting guide — archived. ⚠️ Not runtime-verified (no container runtime in the review session). |
 | TASK-077, TASK-078, TASK-079 | ✅ Done 2026-07-15 — `POST /users/me/password` + operator reset CLI; `DELETE /households/{id}` + `DELETE /users/me` (sole-admin guard, redistribution, token revocation, cascade-deletes the user's `PointLedger` rows); email lowercase normalization + `lower(email)` unique index; leaderboard UTC + exclusive window bounds — archived. |
-| TASK-081 | ⏳ Open — ntfy/Gotify notifications (`docs/archive/backend-report-2026-07-15.md` L10) |
+| TASK-081 | ✅ Done 2026-07-17 — nightly per-household reminder summaries (due today + newly overdue, with assignees) via ntfy or Gotify; off unless `NOTIFY_URL` set; delivery failures never break the job; README setup section — archived. |
 
 ---
 
@@ -165,27 +165,5 @@ Small independent fixes, safe to do in one PR:
 **Acceptance criteria**:
 - [ ] Each numbered item verified individually; `flutter analyze` and `flutter test` green.
 - [ ] Chore description is visible somewhere in the UI.
-
----
-## TASK-081: Backend — Chore Reminder Notifications via ntfy/Gotify Webhook
-
-**Domain**: Backend  
-**Priority**: Low (next feature milestone)  
-**Depends on**: TASK-073  
-**Source**: `docs/archive/backend-report-2026-07-15.md` L10
-
-Nothing notifies assignees of due or overdue chores — `flag_overdue_instances` changes a status nobody sees until they open the app. For a self-hosted stack, push via a self-hostable notification service (ntfy or Gotify) or a generic webhook is a much better fit than FCM/APNS (no Google dependency, works with the existing infra).
-
-**Steps**:
-1. Add optional settings: `NOTIFY_URL` (e.g. an ntfy topic URL or Gotify endpoint), `NOTIFY_TOKEN` (optional auth header). Feature is disabled when unset.
-2. In `run_daily_job`, after generation/flagging, send one summary notification per household (or per user if per-user topics are configured — keep MVP simple: one topic): chores due today and newly overdue chores, with assignee display names.
-3. Use `httpx` with a short timeout; failures are logged, never fail the job.
-4. Document setup in the README (run ntfy alongside via compose, subscribe from the phone app).
-5. Tests: notification payload construction; disabled when unset; delivery failure doesn't break the job.
-
-**Acceptance criteria**:
-- [ ] With `NOTIFY_URL` set, the daily job posts a summary of due/overdue chores.
-- [ ] Unset config = no behavior change.
-- [ ] Notification failure never aborts instance generation.
 
 ---

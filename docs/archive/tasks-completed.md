@@ -1886,3 +1886,27 @@ TASK-016 (Flutter Scaffold)
 TASK-001 └─ TASK-027 (Docker Compose)
 ```
 
+---
+
+## TASK-081: Backend — Chore Reminder Notifications via ntfy/Gotify Webhook
+
+**Domain**: Backend  
+**Priority**: Low (next feature milestone)  
+**Depends on**: TASK-073  
+**Source**: `docs/archive/backend-report-2026-07-15.md` L10
+
+Nothing notifies assignees of due or overdue chores — `flag_overdue_instances` changes a status nobody sees until they open the app. For a self-hosted stack, push via a self-hostable notification service (ntfy or Gotify) or a generic webhook is a much better fit than FCM/APNS (no Google dependency, works with the existing infra).
+
+**Steps**:
+1. Add optional settings: `NOTIFY_URL` (e.g. an ntfy topic URL or Gotify endpoint), `NOTIFY_TOKEN` (optional auth header). Feature is disabled when unset.
+2. In `run_daily_job`, after generation/flagging, send one summary notification per household (or per user if per-user topics are configured — keep MVP simple: one topic): chores due today and newly overdue chores, with assignee display names.
+3. Use `httpx` with a short timeout; failures are logged, never fail the job.
+4. Document setup in the README (run ntfy alongside via compose, subscribe from the phone app).
+5. Tests: notification payload construction; disabled when unset; delivery failure doesn't break the job.
+
+**Acceptance criteria**:
+- [ ] With `NOTIFY_URL` set, the daily job posts a summary of due/overdue chores.
+- [ ] Unset config = no behavior change.
+- [ ] Notification failure never aborts instance generation.
+
+---
