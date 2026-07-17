@@ -143,7 +143,6 @@ class _FakeMembersNotifier extends MembersNotifier {
 Widget _buildScreen({
   required ChoresNotifier Function() choresNotifier,
   List<HouseholdModel>? households,
-  ChoreFilter initialFilter = const ChoreFilter(),
   String currentUserId = _kCurrentUserId,
 }) {
   return ProviderScope(
@@ -153,9 +152,6 @@ Widget _buildScreen({
         () => _DataHouseholdsNotifier(households ?? [_household()]),
       ),
       membersNotifierProvider.overrideWith(_FakeMembersNotifier.new),
-      choreFilterNotifierProvider.overrideWith(
-        () => _FixedFilterNotifier(initialFilter),
-      ),
       currentUserProvider.overrideWith(
         (ref) async => UserProfile(id: currentUserId, displayName: 'Test User'),
       ),
@@ -165,14 +161,6 @@ Widget _buildScreen({
       home: const ChoreListScreen(householdId: _kHouseholdId),
     ),
   );
-}
-
-class _FixedFilterNotifier extends ChoreFilterNotifier {
-  _FixedFilterNotifier(this._initial);
-  final ChoreFilter _initial;
-
-  @override
-  ChoreFilter build() => _initial;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +361,6 @@ void main() {
               () => _DataHouseholdsNotifier([_household()]),
             ),
             membersNotifierProvider.overrideWith(_FakeMembersNotifier.new),
-            choreFilterNotifierProvider.overrideWith(
-              () => _FixedFilterNotifier(const ChoreFilter()),
-            ),
             currentUserProvider.overrideWith(
               (ref) async => const UserProfile(
                 id: _kCurrentUserId,

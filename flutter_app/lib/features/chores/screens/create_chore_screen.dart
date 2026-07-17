@@ -4,42 +4,17 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/api/friendly_error.dart';
+import '../../../core/constants/chore_constants.dart';
 import '../../../features/household/providers/household_provider.dart';
 import '../../../features/household/providers/members_provider.dart';
 import '../models/chore_form_init_data.dart';
-import '../models/chore_model.dart';
 import '../providers/chores_provider.dart';
 import '../../../router/app_router.dart';
 
-// ---------------------------------------------------------------------------
-// Local constants
-// ---------------------------------------------------------------------------
-
-/// Human-readable labels for each category key.
-const _kCategoryLabels = <String, String>{
-  'kitchen': 'Kitchen',
-  'bathroom': 'Bathroom',
-  'bedroom': 'Bedroom',
-  'living_room': 'Living Room',
-  'laundry_room': 'Laundry Room',
-  'garden_outdoor': 'Garden / Outdoor',
-  'garage': 'Garage',
-  'other_general': 'Other / General',
-};
-
-/// Labels and point values for each effort-level key.
-const _kEffortMeta = <String, ({String label, int points})>{
-  'easy': (label: 'Easy', points: 10),
-  'medium': (label: 'Medium', points: 25),
-  'hard': (label: 'Hard', points: 50),
-};
-
-/// Human-readable labels for recurrence interval units.
-const _kIntervalUnitLabels = <String, String>{
-  'days': 'Days',
-  'weeks': 'Weeks',
-  'months': 'Months',
-};
+// Category/effort/interval-unit labels used to be duplicated here (with
+// diverging category wording — "Laundry Room" vs. chore_model.dart's
+// "Laundry") — both now pull from `core/constants/chore_constants.dart`
+// (TASK-065).
 
 // ---------------------------------------------------------------------------
 // CreateChoreScreen
@@ -147,8 +122,9 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
       _choreType = init.choreType;
       _firstDueDate = init.firstDueDate;
       if (init.firstDueDate != null) {
-        _dateController.text =
-            DateFormat('EEE, d MMM yyyy').format(init.firstDueDate!);
+        _dateController.text = DateFormat(
+          'EEE, d MMM yyyy',
+        ).format(init.firstDueDate!);
       }
       _intervalUnit = init.intervalUnit ?? 'weeks';
       _intervalNController.text = (init.intervalN ?? 1).toString();
@@ -222,8 +198,9 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
     };
 
     try {
-      final notifier =
-          ref.read(choresNotifierProvider(widget.householdId).notifier);
+      final notifier = ref.read(
+        choresNotifierProvider(widget.householdId).notifier,
+      );
 
       if (_isEditMode) {
         await notifier.updateChoreDefinition(
@@ -270,14 +247,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
     // Admin guard
     // ---------------------------------------------------------------------------
 
-    final householdsAsync = ref.watch(householdsNotifierProvider);
-    final isAdmin = householdsAsync.whenOrNull(
-          data: (list) => list
-              .where((h) => h.id == widget.householdId)
-              .firstOrNull
-              ?.isAdmin,
-        ) ??
-        false;
+    final isAdmin = ref.watch(isAdminProvider(widget.householdId));
 
     if (!isAdmin) {
       return Scaffold(
@@ -290,8 +260,11 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.lock_outline,
-                    size: 64, color: theme.colorScheme.error),
+                Icon(
+                  Icons.lock_outline,
+                  size: 64,
+                  color: theme.colorScheme.error,
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'Admin access required',
@@ -301,8 +274,9 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
                 const SizedBox(height: 8),
                 Text(
                   'Only household admins can create or edit chores.',
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: Colors.grey.shade600),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.grey.shade600,
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -316,13 +290,10 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
     // Members for assignee dropdown
     // ---------------------------------------------------------------------------
 
-    final membersAsync =
-        ref.watch(membersNotifierProvider(widget.householdId));
+    final membersAsync = ref.watch(membersNotifierProvider(widget.householdId));
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_isEditMode ? 'Edit Chore' : 'Create Chore'),
-      ),
+      appBar: AppBar(title: Text(_isEditMode ? 'Edit Chore' : 'Create Chore')),
       body: Form(
         key: _formKey,
         child: SingleChildScrollView(
@@ -330,215 +301,214 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-            // -----------------------------------------------------------------
-            // Edit-mode banner
-            // -----------------------------------------------------------------
-            if (_isEditMode) ...[
-              _EditModeBanner(theme: theme),
-              const SizedBox(height: 20),
-            ],
+              // -----------------------------------------------------------------
+              // Edit-mode banner
+              // -----------------------------------------------------------------
+              if (_isEditMode) ...[
+                _EditModeBanner(theme: theme),
+                const SizedBox(height: 20),
+              ],
 
-            // -----------------------------------------------------------------
-            // Title
-            // -----------------------------------------------------------------
-            TextFormField(
-              key: const Key('title_field'),
-              controller: _titleController,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                labelText: 'Title *',
-                hintText: 'e.g. Vacuum living room',
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return 'Title is required';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // Description
-            // -----------------------------------------------------------------
-            TextFormField(
-              key: const Key('description_field'),
-              controller: _descriptionController,
-              minLines: 2,
-              maxLines: 5,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                labelText: 'Description (optional)',
-                hintText: 'Add any notes or instructions…',
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // Category
-            // -----------------------------------------------------------------
-            DropdownButtonFormField<String>(
-              key: const Key('category_dropdown'),
-              initialValue: _category,
-              decoration: const InputDecoration(labelText: 'Category *'),
-              items: _kCategoryLabels.entries.map((entry) {
-                return DropdownMenuItem<String>(
-                  value: entry.key,
-                  child: Row(
-                    children: [
-                      Icon(categoryIcons[entry.key], size: 18),
-                      const SizedBox(width: 10),
-                      Text(entry.value),
-                    ],
-                  ),
-                );
-              }).toList(),
-              onChanged: (v) => setState(() => _category = v),
-              validator: (v) =>
-                  v == null ? 'Please select a category' : null,
-            ),
-            const SizedBox(height: 20),
-
-            // -----------------------------------------------------------------
-            // Effort level
-            // -----------------------------------------------------------------
-            const _SectionLabel(label: 'Effort Level'),
-            const SizedBox(height: 10),
-            _EffortLevelSelector(
-              key: const Key('effort_level_selector'),
-              value: _effortLevel,
-              onChanged: (v) => setState(() => _effortLevel = v),
-            ),
-            const SizedBox(height: 20),
-
-            // -----------------------------------------------------------------
-            // Chore type
-            // -----------------------------------------------------------------
-            const _SectionLabel(label: 'Chore Type'),
-            const SizedBox(height: 4),
-            RadioGroup<String>(
-              groupValue: _choreType,
-              onChanged: (v) => setState(() => _choreType = v!),
-              child: const Column(
-                children: [
-                  RadioListTile<String>(
-                    key: Key('type_one_off'),
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('One-off'),
-                    subtitle: Text('Happens only once'),
-                    value: 'one_off',
-                  ),
-                  RadioListTile<String>(
-                    key: Key('type_recurring'),
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('Recurring'),
-                    subtitle: Text('Repeats on a schedule'),
-                    value: 'recurring',
-                  ),
-                ],
-              ),
-            ),
-
-            // -----------------------------------------------------------------
-            // Recurrence rule (shown only for recurring)
-            // -----------------------------------------------------------------
-            if (_isRecurring) ...[
-              const SizedBox(height: 4),
-              _RecurrenceSection(
-                intervalUnit: _intervalUnit,
-                intervalNController: _intervalNController,
-                onUnitChanged: (v) => setState(() => _intervalUnit = v),
-              ),
-            ],
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // First due date
-            // -----------------------------------------------------------------
-            TextFormField(
-              key: const Key('due_date_field'),
-              controller: _dateController,
-              readOnly: true,
-              onTap: _pickDate,
-              decoration: const InputDecoration(
-                labelText: 'First Due Date *',
-                hintText: 'Tap to select a date',
-                suffixIcon: Icon(Icons.calendar_today_outlined),
-              ),
-              // Validator reads from parent state, not the text controller.
-              validator: (_) {
-                if (_firstDueDate == null) {
-                  return 'Please select a due date';
-                }
-                // In edit mode, a chore whose due date already passed must
-                // still be saveable unchanged (TASK-060) — `_pickDate` only
-                // ever offers today-or-later dates, so skipping the
-                // past-date check here can only let through the original,
-                // untouched edit-mode value, never a newly-chosen past date.
-                final dateUnchangedInEditMode =
-                    _isEditMode && !_dueDateManuallyChanged;
-                if (dateUnchangedInEditMode) {
-                  return null;
-                }
-                final now = DateTime.now();
-                final today = DateTime(now.year, now.month, now.day);
-                if (_firstDueDate!.isBefore(today)) {
-                  return 'Due date cannot be in the past';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // Assignee (optional)
-            // -----------------------------------------------------------------
-            membersAsync.when(
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-              data: (members) => DropdownButtonFormField<String?>(
-                key: const Key('assignee_dropdown'),
-                initialValue: _assigneeId,
+              // -----------------------------------------------------------------
+              // Title
+              // -----------------------------------------------------------------
+              TextFormField(
+                key: const Key('title_field'),
+                controller: _titleController,
+                textCapitalization: TextCapitalization.sentences,
                 decoration: const InputDecoration(
-                  labelText: 'Assignee (optional)',
-                  hintText: 'Auto-assign',
+                  labelText: 'Title *',
+                  hintText: 'e.g. Vacuum living room',
                 ),
-                items: [
-                  const DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text('Auto-assign'),
-                  ),
-                  ...members.map(
-                    (m) => DropdownMenuItem<String?>(
-                      value: m.userId,
-                      child: Text(m.displayName),
-                    ),
-                  ),
-                ],
-                onChanged: (v) => setState(() => _assigneeId = v),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Title is required';
+                  }
+                  return null;
+                },
               ),
-            ),
-            const SizedBox(height: 32),
+              const SizedBox(height: 16),
 
-            // -----------------------------------------------------------------
-            // Submit button
-            // -----------------------------------------------------------------
-            ElevatedButton(
-              key: const Key('submit_button'),
-              onPressed: _isSubmitting ? null : _submit,
-              child: _isSubmitting
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+              // -----------------------------------------------------------------
+              // Description
+              // -----------------------------------------------------------------
+              TextFormField(
+                key: const Key('description_field'),
+                controller: _descriptionController,
+                minLines: 2,
+                maxLines: 5,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Description (optional)',
+                  hintText: 'Add any notes or instructions…',
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // -----------------------------------------------------------------
+              // Category
+              // -----------------------------------------------------------------
+              DropdownButtonFormField<String>(
+                key: const Key('category_dropdown'),
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'Category *'),
+                items: categoryLabels.entries.map((entry) {
+                  return DropdownMenuItem<String>(
+                    value: entry.key,
+                    child: Row(
+                      children: [
+                        Icon(categoryIcons[entry.key], size: 18),
+                        const SizedBox(width: 10),
+                        Text(entry.value),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (v) => setState(() => _category = v),
+                validator: (v) => v == null ? 'Please select a category' : null,
+              ),
+              const SizedBox(height: 20),
+
+              // -----------------------------------------------------------------
+              // Effort level
+              // -----------------------------------------------------------------
+              const _SectionLabel(label: 'Effort Level'),
+              const SizedBox(height: 10),
+              _EffortLevelSelector(
+                key: const Key('effort_level_selector'),
+                value: _effortLevel,
+                onChanged: (v) => setState(() => _effortLevel = v),
+              ),
+              const SizedBox(height: 20),
+
+              // -----------------------------------------------------------------
+              // Chore type
+              // -----------------------------------------------------------------
+              const _SectionLabel(label: 'Chore Type'),
+              const SizedBox(height: 4),
+              RadioGroup<String>(
+                groupValue: _choreType,
+                onChanged: (v) => setState(() => _choreType = v!),
+                child: const Column(
+                  children: [
+                    RadioListTile<String>(
+                      key: Key('type_one_off'),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('One-off'),
+                      subtitle: Text('Happens only once'),
+                      value: 'one_off',
+                    ),
+                    RadioListTile<String>(
+                      key: Key('type_recurring'),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Recurring'),
+                      subtitle: Text('Repeats on a schedule'),
+                      value: 'recurring',
+                    ),
+                  ],
+                ),
+              ),
+
+              // -----------------------------------------------------------------
+              // Recurrence rule (shown only for recurring)
+              // -----------------------------------------------------------------
+              if (_isRecurring) ...[
+                const SizedBox(height: 4),
+                _RecurrenceSection(
+                  intervalUnit: _intervalUnit,
+                  intervalNController: _intervalNController,
+                  onUnitChanged: (v) => setState(() => _intervalUnit = v),
+                ),
+              ],
+              const SizedBox(height: 16),
+
+              // -----------------------------------------------------------------
+              // First due date
+              // -----------------------------------------------------------------
+              TextFormField(
+                key: const Key('due_date_field'),
+                controller: _dateController,
+                readOnly: true,
+                onTap: _pickDate,
+                decoration: const InputDecoration(
+                  labelText: 'First Due Date *',
+                  hintText: 'Tap to select a date',
+                  suffixIcon: Icon(Icons.calendar_today_outlined),
+                ),
+                // Validator reads from parent state, not the text controller.
+                validator: (_) {
+                  if (_firstDueDate == null) {
+                    return 'Please select a due date';
+                  }
+                  // In edit mode, a chore whose due date already passed must
+                  // still be saveable unchanged (TASK-060) — `_pickDate` only
+                  // ever offers today-or-later dates, so skipping the
+                  // past-date check here can only let through the original,
+                  // untouched edit-mode value, never a newly-chosen past date.
+                  final dateUnchangedInEditMode =
+                      _isEditMode && !_dueDateManuallyChanged;
+                  if (dateUnchangedInEditMode) {
+                    return null;
+                  }
+                  final now = DateTime.now();
+                  final today = DateTime(now.year, now.month, now.day);
+                  if (_firstDueDate!.isBefore(today)) {
+                    return 'Due date cannot be in the past';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+
+              // -----------------------------------------------------------------
+              // Assignee (optional)
+              // -----------------------------------------------------------------
+              membersAsync.when(
+                loading: () => const SizedBox.shrink(),
+                error: (_, __) => const SizedBox.shrink(),
+                data: (members) => DropdownButtonFormField<String?>(
+                  key: const Key('assignee_dropdown'),
+                  initialValue: _assigneeId,
+                  decoration: const InputDecoration(
+                    labelText: 'Assignee (optional)',
+                    hintText: 'Auto-assign',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Auto-assign'),
+                    ),
+                    ...members.map(
+                      (m) => DropdownMenuItem<String?>(
+                        value: m.userId,
+                        child: Text(m.displayName),
                       ),
-                    )
-                  : Text(_isEditMode ? 'Save Changes' : 'Create Chore'),
-            ),
-          ],
-        ),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _assigneeId = v),
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // -----------------------------------------------------------------
+              // Submit button
+              // -----------------------------------------------------------------
+              ElevatedButton(
+                key: const Key('submit_button'),
+                onPressed: _isSubmitting ? null : _submit,
+                child: _isSubmitting
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(_isEditMode ? 'Save Changes' : 'Create Chore'),
+              ),
+            ],
+          ),
         ), // SingleChildScrollView
       ),
     );
@@ -599,9 +569,9 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       label,
-      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
     );
   }
 }
@@ -624,7 +594,7 @@ class _EffortLevelSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     return SegmentedButton<String>(
       showSelectedIcon: false,
-      segments: _kEffortMeta.entries.map((entry) {
+      segments: effortLevels.entries.map((entry) {
         final meta = entry.value;
         return ButtonSegment<String>(
           value: entry.key,
@@ -678,9 +648,9 @@ class _RecurrenceSection extends StatelessWidget {
           children: [
             Text(
               'Recurrence schedule',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
             Row(
@@ -712,7 +682,7 @@ class _RecurrenceSection extends StatelessWidget {
                     key: const Key('interval_unit_dropdown'),
                     initialValue: intervalUnit,
                     decoration: const InputDecoration(labelText: 'Unit'),
-                    items: _kIntervalUnitLabels.entries.map((entry) {
+                    items: intervalUnitLabels.entries.map((entry) {
                       return DropdownMenuItem<String>(
                         value: entry.key,
                         child: Text(entry.value),

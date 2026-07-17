@@ -47,7 +47,8 @@ class ChoreFormInitData {
   final String title;
   final String? description;
 
-  /// One of the category keys from [categoryLabels] in chore_model.dart.
+  /// One of the category keys from `categoryLabels` in
+  /// `core/constants/chore_constants.dart`.
   final String category;
 
   /// `easy` | `medium` | `hard`

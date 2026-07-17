@@ -6,55 +6,6 @@ import '../../leaderboard/providers/leaderboard_provider.dart';
 import '../models/chore_model.dart';
 
 // ---------------------------------------------------------------------------
-// Filter state
-// ---------------------------------------------------------------------------
-
-class ChoreFilter {
-  const ChoreFilter({
-    this.status,
-    this.category,
-    this.assigneeId,
-  });
-
-  /// null → show all statuses
-  final String? status;
-
-  /// null → show all categories
-  final String? category;
-
-  /// null → show all assignees
-  final String? assigneeId;
-
-  ChoreFilter copyWith({
-    Object? status = _sentinel,
-    Object? category = _sentinel,
-    Object? assigneeId = _sentinel,
-  }) {
-    return ChoreFilter(
-      status: status == _sentinel ? this.status : status as String?,
-      category: category == _sentinel ? this.category : category as String?,
-      assigneeId:
-          assigneeId == _sentinel ? this.assigneeId : assigneeId as String?,
-    );
-  }
-
-  static const Object _sentinel = Object();
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ChoreFilter &&
-          runtimeType == other.runtimeType &&
-          status == other.status &&
-          category == other.category &&
-          assigneeId == other.assigneeId;
-
-  @override
-  int get hashCode =>
-      status.hashCode ^ category.hashCode ^ assigneeId.hashCode;
-}
-
-// ---------------------------------------------------------------------------
 // Chores notifier
 // ---------------------------------------------------------------------------
 
@@ -254,39 +205,3 @@ class ChoresNotifier
 
 final choresNotifierProvider = AsyncNotifierProviderFamily<ChoresNotifier,
     List<ChoreModel>, String>(ChoresNotifier.new);
-
-// ---------------------------------------------------------------------------
-// Filter notifier
-// ---------------------------------------------------------------------------
-
-class ChoreFilterNotifier extends Notifier<ChoreFilter> {
-  @override
-  ChoreFilter build() => const ChoreFilter();
-
-  void setStatus(String? status) {
-    state = state.copyWith(status: status);
-  }
-
-  void setCategory(String? category) {
-    state = state.copyWith(category: category);
-  }
-
-  /// Toggles "my chores only" for [currentUserId]. If already filtering by
-  /// that user, clears the filter.
-  void toggleMyChoresOnly(String currentUserId) {
-    if (state.assigneeId == currentUserId) {
-      state = state.copyWith(assigneeId: null);
-    } else {
-      state = state.copyWith(assigneeId: currentUserId);
-    }
-  }
-
-  void clearAssigneeFilter() {
-    state = state.copyWith(assigneeId: null);
-  }
-}
-
-final choreFilterNotifierProvider =
-    NotifierProvider<ChoreFilterNotifier, ChoreFilter>(
-  ChoreFilterNotifier.new,
-);
