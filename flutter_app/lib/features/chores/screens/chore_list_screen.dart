@@ -160,13 +160,14 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
     if (confirmed != true || !mounted) return;
 
     try {
-      await ref
+      final updatedChore = await ref
           .read(choresNotifierProvider(widget.householdId).notifier)
           .completeChore(chore.id);
       if (!mounted) return;
+      final awarded = updatedChore.pointsAwarded ?? updatedChore.pointValue;
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('You earned ${chore.pointValue} points!'),
+          content: Text('You earned $awarded points!'),
           backgroundColor: _teal,
         ),
       );

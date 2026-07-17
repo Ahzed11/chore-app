@@ -153,10 +153,14 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                       child: RefreshIndicator(
                         key: ValueKey(_activeTab),
                         color: _teal,
-                        onRefresh: () => ref
-                            .read(choresNotifierProvider(widget.householdId)
-                                .notifier)
-                            .refresh(),
+                        onRefresh: () async {
+                          await ref
+                              .read(choresNotifierProvider(widget.householdId)
+                                  .notifier)
+                              .refresh();
+                          ref.invalidate(
+                              weeklyLeaderboardProvider(widget.householdId));
+                        },
                         child: _activeTab == 'todo' && todo.isEmpty
                             ? _AllCaughtUpState()
                             : _activeTab == 'done' && done.isEmpty
@@ -210,14 +214,15 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
     if (confirmed != true || !mounted) return;
 
     try {
-      await ref
+      final updatedChore = await ref
           .read(choresNotifierProvider(widget.householdId).notifier)
           .completeChore(chore.id);
 
       if (!mounted) return;
+      final awarded = updatedChore.pointsAwarded ?? updatedChore.pointValue;
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('You earned ${chore.pointValue} points!'),
+          content: Text('You earned $awarded points!'),
           backgroundColor: _teal,
         ),
       );

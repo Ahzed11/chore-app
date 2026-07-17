@@ -197,7 +197,7 @@ class ChoreCard extends StatelessWidget {
 
             // ---- Points ----
             isComplete
-                ? _PointsPill(points: chore.pointValue)
+                ? _PointsPill(points: chore.pointsAwarded ?? chore.pointValue)
                 : Text(
                     '+${chore.pointValue}',
                     style: const TextStyle(
