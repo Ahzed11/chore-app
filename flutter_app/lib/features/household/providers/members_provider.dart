@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
+import '../../chores/providers/chores_provider.dart';
 import '../models/member_model.dart';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +51,9 @@ class MembersNotifier
     );
     ref.invalidateSelf();
     await future;
+    // A role change can affect who is allowed to see admin-only chore
+    // actions (reassign/delete), so chore cards need a refetch too.
+    ref.invalidate(choresNotifierProvider(householdId));
   }
 
   /// Removes a member from the household and refreshes the list.
@@ -64,6 +68,10 @@ class MembersNotifier
       );
       ref.invalidateSelf();
       await future;
+      // Removing a member redistributes their chores server-side; without
+      // this, assignee names on existing cards go stale until some other
+      // refresh happens to fire.
+      ref.invalidate(choresNotifierProvider(householdId));
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) {
         throw const SoleAdminException(

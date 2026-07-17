@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
+import '../../chores/providers/chores_provider.dart';
 import '../models/household_model.dart';
 import 'members_provider.dart';
 
@@ -76,6 +77,11 @@ class HouseholdsNotifier
       await dio.post<void>(ApiEndpoints.householdLeave(householdId));
       ref.invalidateSelf();
       await future;
+      // The membership and chore-assignment lists for this household are
+      // now stale for anyone still viewing them (e.g. an admin's members
+      // screen after another member leaves).
+      ref.invalidate(membersNotifierProvider(householdId));
+      ref.invalidate(choresNotifierProvider(householdId));
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) {
         throw const SoleAdminException(
@@ -99,6 +105,11 @@ class HouseholdsNotifier
       final household = HouseholdModel.fromJson(response.data!);
       ref.invalidateSelf();
       await future;
+      // The new member needs a fresh member list and chore list for the
+      // household they just joined (e.g. round-robin assignment may have
+      // already picked them up).
+      ref.invalidate(membersNotifierProvider(household.id));
+      ref.invalidate(choresNotifierProvider(household.id));
       return household;
     } on DioException catch (e) {
       final statusCode = e.response?.statusCode;
