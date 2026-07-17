@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
+import '../../leaderboard/providers/leaderboard_provider.dart';
 import '../models/chore_model.dart';
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,15 @@ class ChoresNotifier
     return _fetchChores(arg);
   }
 
+  /// Requests per page. The backend defaults to 50 and caps at 200; 100 keeps
+  /// page count low while staying comfortably under that cap.
+  static const int _pageSize = 100;
+
+  /// Hard stop on the number of pages fetched so a backend bug (e.g. a
+  /// `total` that never matches the accumulated item count) can't spin the
+  /// client into an unbounded request loop.
+  static const int _maxPages = 10;
+
   Future<List<ChoreModel>> _fetchChores(
     String householdId, {
     String? status,
@@ -72,25 +82,47 @@ class ChoresNotifier
   }) async {
     final dio = ref.read(dioProvider);
 
-    final queryParams = <String, String>{};
-    if (status != null && status.isNotEmpty) queryParams['status'] = status;
+    final baseQueryParams = <String, String>{};
+    if (status != null && status.isNotEmpty) {
+      baseQueryParams['status'] = status;
+    }
     if (category != null && category.isNotEmpty) {
-      queryParams['category'] = category;
+      baseQueryParams['category'] = category;
     }
     if (assigneeId != null && assigneeId.isNotEmpty) {
-      queryParams['assignee_id'] = assigneeId;
+      baseQueryParams['assignee_id'] = assigneeId;
     }
 
-    final response = await dio.get<Map<String, dynamic>>(
-      ApiEndpoints.householdChores(householdId),
-      queryParameters: queryParams.isEmpty ? null : queryParams,
-    );
+    // The backend truncates to `limit=50` per page by default; loop through
+    // pages so households with >50 chore instances (recurring series build
+    // up fast) get the full list instead of a silently truncated one.
+    final items = <ChoreModel>[];
+    var offset = 0;
+    var total = 0;
+    var pagesFetched = 0;
 
-    final items = response.data!['items'] as List<dynamic>;
-    return items
-        .cast<Map<String, dynamic>>()
-        .map(ChoreModel.fromJson)
-        .toList();
+    do {
+      final response = await dio.get<Map<String, dynamic>>(
+        ApiEndpoints.householdChores(householdId),
+        queryParameters: {
+          ...baseQueryParams,
+          'limit': '$_pageSize',
+          'offset': '$offset',
+        },
+      );
+
+      final data = response.data!;
+      total = data['total'] as int? ?? 0;
+      final pageItems = data['items'] as List<dynamic>;
+      items.addAll(
+        pageItems.cast<Map<String, dynamic>>().map(ChoreModel.fromJson),
+      );
+
+      offset += _pageSize;
+      pagesFetched++;
+    } while (items.length < total && pagesFetched < _maxPages);
+
+    return items;
   }
 
   /// Marks a chore instance as complete.
@@ -98,7 +130,11 @@ class ChoresNotifier
   /// Uses an optimistic update for instant UI feedback. On failure the previous
   /// state is restored and the error is rethrown so callers can surface
   /// appropriate messages to the user.
-  Future<void> completeChore(String instanceId) async {
+  ///
+  /// Returns the server's authoritative updated chore (with the real
+  /// `pointsAwarded`) so callers can show it instead of a client-derived
+  /// estimate.
+  Future<ChoreModel> completeChore(String instanceId) async {
     final householdId = arg;
     final dio = ref.read(dioProvider);
 
@@ -140,6 +176,15 @@ class ChoresNotifier
         for (final c in chores)
           if (c.id == instanceId) updatedChore else c,
       ]);
+
+      // The rank pill (My Chores) and the Leaderboard tab both derive from
+      // these providers; without invalidating them they'd keep showing
+      // pre-completion standings until some unrelated refresh happened to
+      // occur.
+      ref.invalidate(leaderboardProvider(householdId));
+      ref.invalidate(weeklyLeaderboardProvider(householdId));
+
+      return updatedChore;
     } catch (e) {
       state = previousState; // revert on failure
       rethrow;

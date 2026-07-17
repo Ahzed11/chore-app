@@ -71,9 +71,37 @@ class _FakeChoresNotifier extends ChoresNotifier {
   Future<void> refresh() async {}
 
   @override
-  Future<void> completeChore(String instanceId) async {
-    // No-op: avoids real network calls in tests.
+  Future<ChoreModel> completeChore(String instanceId) async {
+    // Avoids real network calls in tests; returns a plausible "completed"
+    // version of the matching chore (or the first one as a fallback).
+    final chore = _chores.firstWhere(
+      (c) => c.id == instanceId,
+      orElse: () => _chores.first,
+    );
+    return _asComplete(chore);
   }
+}
+
+/// Returns a copy of [chore] marked complete, mirroring what the real
+/// `completeChore` returns from the server response.
+ChoreModel _asComplete(ChoreModel chore) {
+  return ChoreModel(
+    id: chore.id,
+    definitionId: chore.definitionId,
+    householdId: chore.householdId,
+    assigneeId: chore.assigneeId,
+    assigneeName: chore.assigneeName,
+    assignedManually: chore.assignedManually,
+    dueDate: chore.dueDate,
+    status: 'complete',
+    completedAt: DateTime.now(),
+    pointsAwarded: chore.pointsAwarded ?? chore.pointValue,
+    title: chore.title,
+    description: chore.description,
+    category: chore.category,
+    effortLevel: chore.effortLevel,
+    choreType: chore.choreType,
+  );
 }
 
 class _LoadingChoresNotifier extends ChoresNotifier {
@@ -88,8 +116,9 @@ class _TrackingChoresNotifier extends _FakeChoresNotifier {
   final List<String> completedIds = [];
 
   @override
-  Future<void> completeChore(String instanceId) async {
+  Future<ChoreModel> completeChore(String instanceId) async {
     completedIds.add(instanceId);
+    return super.completeChore(instanceId);
   }
 }
 
