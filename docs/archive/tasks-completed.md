@@ -1648,6 +1648,75 @@ TASK-051 fixed the weekly-points banner, but the completion snackbars (`chore_li
 
 ---
 
+## TASK-065: Flutter — Dead Code Removal and Constant Deduplication
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-15, F-16
+
+~750 lines of dead code and several drifting duplicates:
+- `lib/features/household/screens/invite_screen.dart` (355 lines) + route `AppRoutes.invite` + its test file: never navigated to (the management screen's inline accordion replaced it). Delete all three.
+- `lib/features/household/widgets/member_tile.dart` and `lib/features/leaderboard/widgets/leaderboard_entry_tile.dart`: never imported. Delete.
+- `ChoreFilter`/`ChoreFilterNotifier` (`chores_provider.dart:11-54, 202-232`): never read by any screen (filtering is client-side local state). Delete, or wire to server-side filter params — deleting is fine for MVP.
+- `riverpod_annotation`, `riverpod_generator`, `build_runner` in `pubspec.yaml`: no codegen exists. Remove.
+- Category labels duplicated with diverging text (`chore_model.dart:18-27` "Laundry"/"Garden" vs `create_chore_screen.dart:18-27` "Laundry Room"/"Garden / Outdoor") and effort-point maps duplicated (`chore_model.dart:41-45` vs `create_chore_screen.dart:30-34`): consolidate into a single `lib/core/constants/chore_constants.dart`.
+- `_confirmComplete` duplicated verbatim in `chore_list_screen.dart:117-150` and `my_chores_screen.dart:202-241`: extract a shared helper.
+- Avatar color palette + `_avatarColor` duplicated in 4 files: extract to `shared/`.
+- "find my household / isAdmin" lookup duplicated in 5 widgets: add `householdByIdProvider(id)` / `isAdminProvider(id)`.
+
+**Acceptance criteria**:
+- [ ] `flutter analyze` clean; all tests green after deletions.
+- [ ] Category labels and effort points exist in exactly one place.
+- [ ] No behavioral change visible to users (except now-consistent category labels — pick the `create_chore_screen` wording).
+
+---
+## TASK-066: Flutter — Accessibility Pass
+
+**Domain**: Flutter  
+**Priority**: Medium  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-19
+
+Most tap targets are bare `GestureDetector`s with no semantics: circle icon buttons (`chore_list_screen.dart:389-415`), filter tabs (`:534`), the leaderboard period picker (`leaderboard_screen.dart:276`), the copy-invite button (`household_management_screen.dart:471`). The chore-complete status circle is a 30px target (`chore_card.dart:85-90`), below the 48dp minimum. Overdue/complete state is conveyed by color alone in several places. Only 8 `tooltip`/`Semantics` usages exist in the whole lib.
+
+**Steps**:
+1. Replace bare `GestureDetector` buttons with `IconButton`/`InkWell` or wrap in `Semantics(button: true, label: ...)`.
+2. Enlarge the status-circle hit area to >=48dp (padding or `Material` + `InkWell` with a bigger `customBorder`).
+3. Add non-color signals for overdue (icon already exists on cards — ensure a semantic label too) and completed states.
+4. Run `flutter analyze` and the existing widget tests; add semantics-based finders in tests where practical.
+
+**Acceptance criteria**:
+- [ ] TalkBack announces meaningful labels for all interactive elements on the four main screens.
+- [ ] All tap targets are >=48dp.
+
+---
+## TASK-067: Flutter — Low-Priority Fix Batch
+
+**Domain**: Flutter  
+**Priority**: Low  
+**Depends on**: none  
+**Source**: `docs/archive/frontend-report-2026-07-15.md` F-17, F-21, F-22, F-23, F-25, F-26, F-27, F-28
+
+Small independent fixes, safe to do in one PR:
+1. **Chore description is write-only** (F-17): show it — e.g. tap a chore card to expand or open a detail bottom sheet displaying description, category, assignee, due date, recurrence.
+2. **`AuthState.copyWith` token trap** (F-21, `auth_state.dart:60-65`): `token ?? this.token` makes clearing impossible; use the sentinel pattern already used in `ChoreFilter.copyWith`.
+3. **Two sources of current-user ID** (F-22): standardize on `currentUserProvider` (`GET /users/me`); remove the client-side JWT decode in `leaderboard_provider.dart:19-45` and the usage in `chore_list_screen.dart:179`.
+4. **Empty displayName crash** (F-23): guard `displayName[0]` at `household_management_screen.dart:869,1022` like the other avatar widgets do.
+5. **Cold-start login flash** (F-25): add a splash/loading route while auth status is `unknown` (`app_router.dart:86-88`).
+6. **Bundle the Outfit font** (F-26): add font assets and `GoogleFonts.config.allowRuntimeFetching = false` so LAN-only installs render correctly on first run.
+7. **Pull-to-refresh on management screen** (F-27): wrap the `SingleChildScrollView` at `household_management_screen.dart:216` in a `RefreshIndicator` invalidating the members provider.
+8. **Dependency bumps** (F-28): raise `flutter_lints`, `go_router`, `intl`, `share_plus` to current majors; fix any resulting deprecations. Also clear the ~17 info-level analyzer findings reported by Flutter stable ≥3.44 (Radio `groupValue`/`onChanged` → `RadioGroup`, `DropdownButtonFormField.value` → `initialValue`, `prefer_const_constructors` in `create_chore_screen.dart` and `household_management_screen.dart`) — CI currently runs `flutter analyze --no-fatal-infos`, so these are reported but not blocking; once cleared, consider dropping the flag.
+9. **`test/widget_test.dart` uses real `FlutterSecureStorage`** (F-20): `_initialize()` throws `MissingPluginException` in the test environment (`auth_state.dart:79-86` has no try/catch). Override the storage/auth provider in the test, and add a try/catch around storage reads in `_initialize` so a broken keystore degrades to logged-out instead of crashing.
+
+**Acceptance criteria**:
+- [ ] Each numbered item verified individually; `flutter analyze` and `flutter test` green.
+- [ ] Chore description is visible somewhere in the UI.
+
+---
+
+---
+
 ## TASK-068: Backend — Fix Broken Login (500 on Every Request) and Stale Integration Test
 
 **Domain**: Backend  
