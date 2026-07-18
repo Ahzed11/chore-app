@@ -1,13 +1,19 @@
 import 'package:flutter/material.dart';
 
+import '../../core/api/friendly_error.dart';
+
 class AppErrorWidget extends StatelessWidget {
   const AppErrorWidget({
     super.key,
-    required this.message,
+    required this.error,
     this.onRetry,
   });
 
-  final String message;
+  /// The raw error (typically a [DioException] surfaced by an
+  /// [AsyncValue.error]). Rendered through [friendlyErrorMessage] rather
+  /// than `error.toString()`, which would dump Dio's internal formatting
+  /// and the full request URL at the user.
+  final Object error;
   final VoidCallback? onRetry;
 
   @override
@@ -35,7 +41,7 @@ class AppErrorWidget extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              message,
+              friendlyErrorMessage(error),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: Colors.grey.shade600,
               ),

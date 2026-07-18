@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
+import '../../../core/api/friendly_error.dart';
 import '../../../core/auth/auth_state.dart';
 
 // ---------------------------------------------------------------------------
@@ -109,16 +110,13 @@ class AuthFormNotifier extends Notifier<AuthFormState> {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  /// Delegates to the shared FastAPI-`detail` extractor (see
+  /// `core/api/friendly_error.dart`) so a 422 request-validation body (a
+  /// list of `{loc, msg, type}` objects) is flattened into readable text
+  /// instead of falling through to [fallback] or, worse, being rendered as
+  /// raw JSON.
   String _extractMessage(DioException e, {required String fallback}) {
-    try {
-      final data = e.response?.data;
-      if (data is Map && data['detail'] != null) {
-        return data['detail'].toString();
-      }
-    } catch (_) {
-      // ignore parse errors
-    }
-    return fallback;
+    return extractErrorDetail(e) ?? fallback;
   }
 }
 

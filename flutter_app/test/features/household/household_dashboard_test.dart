@@ -279,6 +279,16 @@ void main() {
       expect(find.byKey(const Key('join_by_invite_button')), findsOneWidget);
     });
 
+    testWidgets('renders server settings button in app bar', (tester) async {
+      await tester.pumpWidget(buildDashboardWithData([]));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('dashboard_server_settings_button')),
+        findsOneWidget,
+      );
+    });
+
     // -----------------------------------------------------------------------
     // FAB
     // -----------------------------------------------------------------------

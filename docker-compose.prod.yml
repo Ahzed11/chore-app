@@ -1,0 +1,77 @@
+# Production deployment.
+#
+# Usage:
+#   cp .env.example .env   # then fill in JWT_SECRET / POSTGRES_PASSWORD / etc.
+#   make prod-up           # or: docker compose -f docker-compose.prod.yml up -d
+#
+# Differences from the dev docker-compose.yml:
+#   - api runs the published GHCR image (no source bind mount, no --reload).
+#   - api runs Alembic migrations automatically on startup (see
+#     backend/docker-entrypoint.sh) instead of requiring `make migrate`.
+#   - DEBUG is forced off (disables /docs, /redoc, /openapi.json).
+#   - db does not publish a host port — only reachable from other containers
+#     on this compose network.
+#   - a backup service takes nightly pg_dump snapshots (see TASK-075 / README).
+#
+# See README.md for the full self-hosting guide, including HTTPS
+# reverse-proxy setup and restore instructions.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: choreapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}
+      POSTGRES_DB: choreapp
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U choreapp -d choreapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No host port mapping: only api and backup (on this compose network)
+    # can reach postgres. Use `make prod-db-shell` for a psql session.
+
+  api:
+    image: ${CHORE_APP_IMAGE:-ghcr.io/ahzed11/chore-app-api:latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Built from POSTGRES_PASSWORD rather than requiring users to
+      # assemble the full URL themselves.
+      DATABASE_URL: postgresql+asyncpg://choreapp:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}@db:5432/choreapp
+      # Forced off regardless of .env content — production never serves
+      # /docs, /redoc, or /openapi.json.
+      DEBUG: "false"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # No `command:` override and no source volume: the image's default CMD
+    # (backend/docker-entrypoint.sh) runs `alembic upgrade head` and then
+    # starts uvicorn without --reload.
+
+  backup:
+    image: prodrigestivill/postgres-backup-local:16
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backups:/backups
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: choreapp
+      POSTGRES_USER: choreapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (see .env.example)}
+      SCHEDULE: ${BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      BACKUP_KEEP_WEEKS: ${BACKUP_KEEP_WEEKS:-4}
+      BACKUP_KEEP_MONTHS: ${BACKUP_KEEP_MONTHS:-0}
+      HEALTHCHECK_PORT: 8080
+
+volumes:
+  postgres_data:

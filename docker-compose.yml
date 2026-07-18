@@ -29,7 +29,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://choreapp:${POSTGRES_PASSWORD:-choreapp_dev}@db:5432/choreapp
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env (see .env.example)}
       JWT_ALGORITHM: HS256
-      JWT_EXPIRY_DAYS: 7
+      JWT_EXPIRY_MINUTES: 30
       APP_BASE_URL: http://localhost:8000
       DEBUG: "true"
     depends_on:

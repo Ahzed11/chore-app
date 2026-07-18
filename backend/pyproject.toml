@@ -17,6 +17,8 @@ dependencies = [
     "apscheduler>=3.10",
     "python-dateutil>=2.9",
     "structlog>=24.0.0",
+    "slowapi>=0.1.9",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +26,6 @@ test = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "httpx>=0.28.1",
     "ruff>=0.9",
 ]
 

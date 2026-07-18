@@ -4,13 +4,16 @@ import 'package:go_router/go_router.dart';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../../../router/app_router.dart';
+import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/avatar_colors.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
+import '../../auth/providers/current_user_provider.dart';
 import '../../household/models/member_model.dart';
 import '../../household/providers/household_provider.dart';
 import '../../household/providers/members_provider.dart';
-import '../../leaderboard/providers/leaderboard_provider.dart';
 import '../models/chore_model.dart';
 import '../providers/chores_provider.dart';
 import '../widgets/chore_card.dart';
@@ -103,7 +106,9 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
       } catch (e) {
         if (mounted) {
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text('Failed to delete: $e')),
+            SnackBar(
+              content: Text('Failed to delete: ${friendlyErrorMessage(e)}'),
+            ),
           );
         }
       }
@@ -111,40 +116,44 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Complete confirmation
+  // Reassign
   // ---------------------------------------------------------------------------
 
-  Future<void> _confirmComplete(ChoreModel chore) async {
+  Future<void> _reassignChore(ChoreModel chore, String memberId) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
-
-    final confirmed = await showChoreCompleteSheet(context, chore);
-    if (confirmed != true || !mounted) return;
-
     try {
       await ref
           .read(choresNotifierProvider(widget.householdId).notifier)
-          .completeChore(chore.id);
+          .reassignChore(chore.id, memberId);
       if (!mounted) return;
       scaffoldMessenger.showSnackBar(
-        SnackBar(
-          content: Text('You earned ${chore.pointValue} points!'),
+        const SnackBar(
+          content: Text('Chore reassigned.'),
           backgroundColor: _teal,
         ),
       );
     } on DioException catch (e) {
       if (!mounted) return;
       final code = e.response?.statusCode;
-      scaffoldMessenger.showSnackBar(SnackBar(
-        content: Text(code == 409
-            ? 'This chore was already completed.'
-            : code == 403
-                ? 'You are not assigned to this chore.'
-                : 'Failed to complete chore. Please try again.'),
-      ));
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            code == 409
+                ? 'This chore can no longer be reassigned.'
+                : code == 403
+                ? 'You do not have permission to reassign chores.'
+                : code == 422
+                ? 'That member is no longer part of this household.'
+                : 'Failed to reassign chore. Please try again.',
+          ),
+        ),
+      );
     } catch (_) {
       if (!mounted) return;
       scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text('Failed to complete chore. Please try again.')),
+        const SnackBar(
+          content: Text('Failed to reassign chore. Please try again.'),
+        ),
       );
     }
   }
@@ -156,27 +165,16 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   @override
   Widget build(BuildContext context) {
     final choresAsync = ref.watch(choresNotifierProvider(widget.householdId));
-    final householdsAsync = ref.watch(householdsNotifierProvider);
+    final household = ref.watch(householdByIdProvider(widget.householdId));
     final membersAsync = ref.watch(membersNotifierProvider(widget.householdId));
-    final String householdName = householdsAsync.whenOrNull(
-          data: (list) => list
-              .where((h) => h.id == widget.householdId)
-              .firstOrNull
-              ?.name,
-        ) ??
-        '';
+    final String householdName = household?.name ?? '';
+    final bool isAdmin = ref.watch(isAdminProvider(widget.householdId));
 
-    final bool isAdmin = householdsAsync.whenOrNull(
-          data: (list) => list
-              .where((h) => h.id == widget.householdId)
-              .firstOrNull
-              ?.isAdmin,
-        ) ??
-        false;
-
-    final List<MemberModel> members =
-        membersAsync.valueOrNull ?? const [];
-    final String? currentUserId = ref.watch(currentUserIdProvider);
+    final List<MemberModel> members = membersAsync.valueOrNull ?? const [];
+    final String? currentUserId = ref
+        .watch(currentUserProvider)
+        .valueOrNull
+        ?.id;
 
     return PopScope(
       canPop: false,
@@ -196,7 +194,8 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                 householdName: householdName,
                 isAdmin: isAdmin,
                 members: members,
-                pendingCount: choresAsync.whenOrNull(
+                pendingCount:
+                    choresAsync.whenOrNull(
                       data: (list) => list
                           .where(
                             (c) =>
@@ -220,7 +219,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                   loading: () =>
                       const LoadingWidget(message: 'Loading chores...'),
                   error: (error, _) => AppErrorWidget(
-                    message: error.toString(),
+                    error: error,
                     onRetry: () => ref
                         .read(
                           choresNotifierProvider(widget.householdId).notifier,
@@ -233,8 +232,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                       color: _teal,
                       onRefresh: () => ref
                           .read(
-                            choresNotifierProvider(widget.householdId)
-                                .notifier,
+                            choresNotifierProvider(widget.householdId).notifier,
                           )
                           .refresh(),
                       child: filtered.isEmpty
@@ -255,16 +253,26 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                                   key: Key('chore_card_${chore.id}'),
                                   chore: chore,
                                   isAdmin: isAdmin,
+                                  members: members,
                                   onDeleteSeries: isAdmin
                                       ? () => _confirmDelete(
-                                            context,
-                                            chore.definitionId,
-                                            chore.title,
-                                          )
+                                          context,
+                                          chore.definitionId,
+                                          chore.title,
+                                        )
                                       : null,
-                                  onCompleteTap: isMyChore &&
-                                          chore.status != 'complete'
-                                      ? () => _confirmComplete(chore)
+                                  onReassign: isAdmin
+                                      ? (memberId) =>
+                                            _reassignChore(chore, memberId)
+                                      : null,
+                                  onCompleteTap:
+                                      isMyChore && chore.status != 'complete'
+                                      ? () => confirmCompleteChore(
+                                          context: context,
+                                          ref: ref,
+                                          householdId: widget.householdId,
+                                          chore: chore,
+                                        )
                                       : null,
                                 );
                               },
@@ -330,16 +338,17 @@ class _ChoreListHeader extends StatelessWidget {
             children: [
               _CircleIconButton(
                 icon: Icons.arrow_back_rounded,
+                label: 'Back to households',
                 onTap: () => context.go('/households'),
               ),
               const SizedBox(width: 14),
-              if (members.isNotEmpty)
-                _MemberAvatarStack(members: members),
+              if (members.isNotEmpty) _MemberAvatarStack(members: members),
               const Spacer(),
               if (isAdmin)
                 _CircleIconButton(
                   icon: Icons.group_rounded,
                   key: const Key('manage_members_button'),
+                  label: 'Manage household members',
                   onTap: () => context.pushNamed(
                     AppRoutes.householdManage,
                     pathParameters: {'householdId': householdId},
@@ -390,16 +399,22 @@ class _CircleIconButton extends StatelessWidget {
   const _CircleIconButton({
     super.key,
     required this.icon,
+    required this.label,
     required this.onTap,
   });
 
   final IconData icon;
+  final String label;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return AccessibleTap(
       onTap: onTap,
+      label: label,
+      customBorder: const CircleBorder(),
+      naturalSize: 40,
+      minTapSize: 48,
       child: Container(
         width: 40,
         height: 40,
@@ -423,20 +438,6 @@ class _MemberAvatarStack extends StatelessWidget {
 
   final List<MemberModel> members;
 
-  static const List<Color> _colors = [
-    Color(0xFF14B8A6),
-    Color(0xFF0EA5E9),
-    Color(0xFF8B5CF6),
-    Color(0xFF22C55E),
-    Color(0xFFF472B6),
-    Color(0xFFF97316),
-  ];
-
-  static Color _colorFor(String name) {
-    if (name.isEmpty) return _colors[0];
-    return _colors[name.codeUnitAt(0) % _colors.length];
-  }
-
   @override
   Widget build(BuildContext context) {
     const avatarSize = 30.0;
@@ -458,7 +459,7 @@ class _MemberAvatarStack extends StatelessWidget {
               left: i * step,
               child: _Avatar(
                 name: shown[i].displayName,
-                color: _colorFor(shown[i].displayName),
+                color: avatarColorForName(shown[i].displayName),
                 size: avatarSize,
               ),
             ),
@@ -492,11 +493,7 @@ class _MemberAvatarStack extends StatelessWidget {
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({
-    required this.name,
-    required this.color,
-    required this.size,
-  });
+  const _Avatar({required this.name, required this.color, required this.size});
 
   final String name;
   final Color color;
@@ -552,9 +549,10 @@ class _ChoreFilterTabs extends StatelessWidget {
               final isActive = activeFilter == key;
               return Padding(
                 padding: const EdgeInsets.only(right: 26),
-                child: GestureDetector(
+                child: AccessibleTap(
                   onTap: () => onFilterChanged(key),
-                  behavior: HitTestBehavior.opaque,
+                  label: '$label filter',
+                  selected: isActive,
                   child: Container(
                     padding: const EdgeInsets.only(bottom: 10),
                     decoration: BoxDecoration(
@@ -569,8 +567,9 @@ class _ChoreFilterTabs extends StatelessWidget {
                       label,
                       style: TextStyle(
                         fontSize: 14,
-                        fontWeight:
-                            isActive ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight: isActive
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                         color: isActive ? _teal : _tabInactive,
                       ),
                     ),
@@ -645,25 +644,25 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, title, subtitle) = switch (filter) {
       'done' => (
-          Icons.check_circle_outline_rounded,
-          'No completed chores',
-          'Completed chores will appear here.',
-        ),
+        Icons.check_circle_outline_rounded,
+        'No completed chores',
+        'Completed chores will appear here.',
+      ),
       'overdue' => (
-          Icons.schedule_rounded,
-          'No overdue chores',
-          'Great work keeping up!',
-        ),
+        Icons.schedule_rounded,
+        'No overdue chores',
+        'Great work keeping up!',
+      ),
       'pending' => (
-          Icons.checklist_rounded,
-          'Nothing pending',
-          'All current chores are either done or overdue.',
-        ),
+        Icons.checklist_rounded,
+        'Nothing pending',
+        'All current chores are either done or overdue.',
+      ),
       _ => (
-          Icons.check_circle_outline_rounded,
-          'All clear!',
-          'No chores here. Add one with the + button.',
-        ),
+        Icons.check_circle_outline_rounded,
+        'All clear!',
+        'No chores here. Add one with the + button.',
+      ),
     };
 
     return ListView(
@@ -691,10 +690,7 @@ class _EmptyState extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 subtitle,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: _secondaryText,
-                ),
+                style: const TextStyle(fontSize: 14, color: _secondaryText),
                 textAlign: TextAlign.center,
               ),
             ],

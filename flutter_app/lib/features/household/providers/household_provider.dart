@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
+import '../../chores/providers/chores_provider.dart';
 import '../models/household_model.dart';
 import 'members_provider.dart';
 
@@ -76,6 +77,11 @@ class HouseholdsNotifier
       await dio.post<void>(ApiEndpoints.householdLeave(householdId));
       ref.invalidateSelf();
       await future;
+      // The membership and chore-assignment lists for this household are
+      // now stale for anyone still viewing them (e.g. an admin's members
+      // screen after another member leaves).
+      ref.invalidate(membersNotifierProvider(householdId));
+      ref.invalidate(choresNotifierProvider(householdId));
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) {
         throw const SoleAdminException(
@@ -99,6 +105,11 @@ class HouseholdsNotifier
       final household = HouseholdModel.fromJson(response.data!);
       ref.invalidateSelf();
       await future;
+      // The new member needs a fresh member list and chore list for the
+      // household they just joined (e.g. round-robin assignment may have
+      // already picked them up).
+      ref.invalidate(membersNotifierProvider(household.id));
+      ref.invalidate(choresNotifierProvider(household.id));
       return household;
     } on DioException catch (e) {
       final statusCode = e.response?.statusCode;
@@ -125,3 +136,25 @@ final householdsNotifierProvider =
 // Keep the selectedHouseholdIdProvider for backwards compatibility
 // with any references elsewhere in the codebase.
 final selectedHouseholdIdProvider = StateProvider<String?>((ref) => null);
+
+// ---------------------------------------------------------------------------
+// Per-household lookups
+// ---------------------------------------------------------------------------
+
+/// Looks up a single household by [householdId] out of the current user's
+/// household list. `null` while loading/erroring or if the household isn't
+/// (yet) in the list.
+///
+/// Used to be a `householdsAsync.whenOrNull(data: (list) => list.where(...)
+/// .firstOrNull)` one-liner duplicated across five screens (TASK-065).
+final householdByIdProvider =
+    Provider.family<HouseholdModel?, String>((ref, householdId) {
+  final households = ref.watch(householdsNotifierProvider).valueOrNull;
+  return households?.where((h) => h.id == householdId).firstOrNull;
+});
+
+/// Whether the current user is an admin of household [householdId]. `false`
+/// while loading/erroring or if the household isn't in the list.
+final isAdminProvider = Provider.family<bool, String>((ref, householdId) {
+  return ref.watch(householdByIdProvider(householdId))?.isAdmin ?? false;
+});

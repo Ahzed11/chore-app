@@ -3,17 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/auth/auth_state.dart';
+import '../core/config/server_url_provider.dart';
 import '../features/auth/screens/login_screen.dart';
 import '../features/auth/screens/register_screen.dart';
 import '../features/chores/models/chore_form_init_data.dart';
 import '../features/chores/screens/chore_list_screen.dart';
 import '../features/chores/screens/create_chore_screen.dart';
 import '../features/chores/screens/my_chores_screen.dart';
-import '../features/household/models/invite_model.dart';
+import '../features/household/providers/pending_join_provider.dart';
 import '../features/household/screens/household_dashboard_screen.dart';
 import '../features/household/screens/household_management_screen.dart';
-import '../features/household/screens/invite_screen.dart';
+import '../features/household/screens/join_invite_screen.dart';
 import '../features/leaderboard/screens/leaderboard_screen.dart';
+import '../features/server/screens/server_setup_screen.dart';
+import '../shared/widgets/splash_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Route name constants
@@ -22,15 +25,28 @@ import '../features/leaderboard/screens/leaderboard_screen.dart';
 class AppRoutes {
   AppRoutes._();
 
+  static const String splash = 'splash';
   static const String login = 'login';
   static const String register = 'register';
+  static const String serverSetup = 'server-setup';
   static const String households = 'households';
   static const String choreList = 'chore-list';
   static const String myChores = 'my-chores';
   static const String leaderboard = 'leaderboard';
   static const String householdManage = 'household-manage';
   static const String createChore = 'create-chore';
-  static const String invite = 'invite';
+  static const String joinInvite = 'join-invite';
+}
+
+// ---------------------------------------------------------------------------
+// Navigation helpers
+// ---------------------------------------------------------------------------
+
+/// Navigates to the server-setup screen so the user can point the app at a
+/// different server. Unlike the mandatory first-run redirect, this shows a
+/// cancel button (`canCancel: true`) since a server is already configured.
+void goToChangeServer(BuildContext context) {
+  context.pushNamed(AppRoutes.serverSetup, extra: const {'canCancel': true});
 }
 
 // ---------------------------------------------------------------------------
@@ -73,18 +89,46 @@ Page<void> _slidePage(GoRouterState state, Widget child) {
 // ---------------------------------------------------------------------------
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  // Listenable that triggers router refresh when auth state changes.
-  final authNotifier = _AuthStateListenable(ref);
+  // Listenable that triggers router refresh when auth or server-config
+  // state changes.
+  final appState = _AppStateListenable(ref);
 
   return GoRouter(
-    refreshListenable: authNotifier,
-    initialLocation: '/login',
+    refreshListenable: appState,
+    initialLocation: '/splash',
     redirect: (BuildContext context, GoRouterState state) {
+      final serverState = ref.read(serverUrlProvider);
+      final isOnSplash = state.matchedLocation == '/splash';
+      final isOnServerSetup = state.matchedLocation == '/server-setup';
+
+      // Still resolving the persisted server URL from secure storage — hold
+      // on the splash screen (TASK-067 F-25) instead of flashing whatever
+      // route happens to render first, only to redirect away a moment later.
+      if (serverState.status == ServerUrlStatus.unknown) {
+        return isOnSplash ? null : '/splash';
+      }
+
+      // No server configured yet — first-run setup screen, before login,
+      // regardless of auth state.
+      if (serverState.status == ServerUrlStatus.unconfigured) {
+        return isOnServerSetup ? null : '/server-setup';
+      }
+
+      // Server is configured — fall through to the usual auth-route
+      // redirects below. These already do the right thing for
+      // `/server-setup` without a special case: an unauthenticated user who
+      // just finished first-run setup (or just changed servers, which logs
+      // them out) is bounced to `/login` same as any other non-auth route;
+      // an authenticated user who voluntarily navigated here to change the
+      // server (and hasn't submitted yet) is authenticated + not on an auth
+      // route, so neither branch fires and they're left alone to fill in
+      // the form or cancel.
       final authState = ref.read(authNotifierProvider);
 
-      // Still resolving token from secure storage.
+      // Still resolving token from secure storage — same cold-start flash
+      // this used to cause on `/login` (TASK-067 F-25).
       if (authState.status == AuthStatus.unknown) {
-        return null; // Let through; will refresh once resolved.
+        return isOnSplash ? null : '/splash';
       }
 
       final isAuthenticated = authState.isAuthenticated;
@@ -92,23 +136,68 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           state.matchedLocation == '/login' ||
           state.matchedLocation == '/register';
 
+      // Invite deep link (`/join/:token`, TASK-061). An unauthenticated
+      // visitor (fresh install, or logged out) can't join yet — stash the
+      // token and send them through the normal login/registration flow
+      // first; the `isAuthenticated && (isOnAuthRoute || isOnSplash)` branch
+      // below routes them straight back here once they're signed in. This
+      // runs *after* the unconfigured-server check above, so a deep link
+      // opened on a fresh install already goes
+      // server-setup → login/register → join, as required.
+      final isOnJoinRoute = state.matchedLocation.startsWith('/join/');
+      if (isOnJoinRoute && !isAuthenticated) {
+        final token = state.pathParameters['token'];
+        if (token != null && token.isNotEmpty) {
+          ref.read(pendingJoinTokenProvider.notifier).stash(token);
+        }
+        return '/login';
+      }
+
       if (!isAuthenticated && !isOnAuthRoute) {
         return '/login';
       }
 
-      if (isAuthenticated && isOnAuthRoute) {
+      // Both the ordinary "just logged in from /login or /register" case
+      // and "auth/server status just finished resolving while still sitting
+      // on /splash" land here — either way, an authenticated user shouldn't
+      // stay on either screen.
+      if (isAuthenticated && (isOnAuthRoute || isOnSplash)) {
+        final pendingToken = ref.read(pendingJoinTokenProvider);
+        if (pendingToken != null) {
+          return '/join/$pendingToken';
+        }
         return '/households';
       }
 
       return null;
     },
     routes: [
+      // Splash — shown only while the persisted server URL / auth token are
+      // being resolved from secure storage; the redirect above always moves
+      // on from here once that resolves.
+      GoRoute(
+        path: '/splash',
+        name: AppRoutes.splash,
+        pageBuilder: (context, state) => _tabPage(state, const SplashScreen()),
+      ),
+
+      // Server setup — shown first-run (before login) when no URL is
+      // configured, and reachable later to change the server.
+      GoRoute(
+        path: '/server-setup',
+        name: AppRoutes.serverSetup,
+        pageBuilder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>?;
+          final canCancel = extra?['canCancel'] == true;
+          return _tabPage(state, ServerSetupScreen(canCancel: canCancel));
+        },
+      ),
+
       // Auth routes — simple fade so the login↔register transition isn't jarring
       GoRoute(
         path: '/login',
         name: AppRoutes.login,
-        pageBuilder: (context, state) =>
-            _tabPage(state, const LoginScreen()),
+        pageBuilder: (context, state) => _tabPage(state, const LoginScreen()),
       ),
       GoRoute(
         path: '/register',
@@ -167,19 +256,21 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           final id = state.pathParameters['householdId']!;
           final initData = state.extra as ChoreFormInitData?;
           return _slidePage(
-              state, CreateChoreScreen(householdId: id, initData: initData));
+            state,
+            CreateChoreScreen(householdId: id, initData: initData),
+          );
         },
       ),
+      // Invite deep link — `choreapp:///join/:token` (custom scheme, see
+      // `InviteResponse.deepLink`) as well as anyone who pastes the path
+      // directly. Only ever rendered while authenticated; see the
+      // `isOnJoinRoute` handling in `redirect` above for the logged-out case.
       GoRoute(
-        path: '/households/:householdId/invite',
-        name: AppRoutes.invite,
+        path: '/join/:token',
+        name: AppRoutes.joinInvite,
         pageBuilder: (context, state) {
-          final id = state.pathParameters['householdId']!;
-          final extra = state.extra as Map<String, dynamic>?;
-          final initialInvite =
-              extra != null ? InviteResponse.fromJson(extra) : null;
-          return _slidePage(
-              state, InviteScreen(householdId: id, initialInvite: initialInvite));
+          final token = state.pathParameters['token']!;
+          return _tabPage(state, JoinInviteScreen(token: token));
         },
       ),
     ],
@@ -187,22 +278,28 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 });
 
 // ---------------------------------------------------------------------------
-// Auth state change listenable (bridges Riverpod -> GoRouter refresh)
+// App state change listenable (bridges Riverpod -> GoRouter refresh)
 // ---------------------------------------------------------------------------
 
-class _AuthStateListenable extends ChangeNotifier {
-  _AuthStateListenable(Ref ref) {
-    _subscription = ref.listen<AuthState>(
+class _AppStateListenable extends ChangeNotifier {
+  _AppStateListenable(Ref ref) {
+    _authSubscription = ref.listen<AuthState>(
       authNotifierProvider,
+      (_, __) => notifyListeners(),
+    );
+    _serverSubscription = ref.listen<ServerUrlState>(
+      serverUrlProvider,
       (_, __) => notifyListeners(),
     );
   }
 
-  late final ProviderSubscription<AuthState> _subscription;
+  late final ProviderSubscription<AuthState> _authSubscription;
+  late final ProviderSubscription<ServerUrlState> _serverSubscription;
 
   @override
   void dispose() {
-    _subscription.close();
+    _authSubscription.close();
+    _serverSubscription.close();
     super.dispose();
   }
 }

@@ -1,9 +1,9 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../router/app_router.dart';
+import '../../../shared/widgets/accessible_tap.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../../auth/providers/current_user_provider.dart';
@@ -42,20 +42,16 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
   Widget build(BuildContext context) {
     final choresAsync = ref.watch(choresNotifierProvider(widget.householdId));
     final currentUserAsync = ref.watch(currentUserProvider);
-    final weeklyAsync = ref.watch(weeklyLeaderboardProvider(widget.householdId));
+    final weeklyAsync = ref.watch(
+      weeklyLeaderboardProvider(widget.householdId),
+    );
 
     final String? userId = currentUserAsync.whenOrNull(data: (u) => u.id);
     final String displayName =
         currentUserAsync.whenOrNull(data: (u) => u.displayName) ?? '';
     final firstName = displayName.split(' ').first;
 
-    final bool isAdmin = ref
-            .watch(householdsNotifierProvider)
-            .valueOrNull
-            ?.where((h) => h.id == widget.householdId)
-            .firstOrNull
-            ?.isAdmin ??
-        false;
+    final bool isAdmin = ref.watch(isAdminProvider(widget.householdId));
 
     // Rank from leaderboard API (requires knowing other users' scores)
     int? rank;
@@ -75,7 +71,7 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
           child: choresAsync.when(
             loading: () => const LoadingWidget(message: 'Loading your chores…'),
             error: (error, _) => AppErrorWidget(
-              message: error.toString(),
+              error: error,
               onRetry: () => ref
                   .read(choresNotifierProvider(widget.householdId).notifier)
                   .refresh(),
@@ -84,34 +80,44 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
               final myChores = userId == null
                   ? <ChoreModel>[]
                   : allChores
-                      .where((c) =>
-                          c.assigneeId == userId && c.status != 'cancelled')
-                      .toList();
+                        .where(
+                          (c) =>
+                              c.assigneeId == userId && c.status != 'cancelled',
+                        )
+                        .toList();
 
               final overdue = myChores.where((c) => c.isOverdue).toList()
                 ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
-              final pending = myChores
-                  .where((c) => c.status == 'pending' && !c.isOverdue)
-                  .toList()
-                ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+              final pending =
+                  myChores
+                      .where((c) => c.status == 'pending' && !c.isOverdue)
+                      .toList()
+                    ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
               final todo = [...overdue, ...pending];
-              final done = myChores
-                  .where((c) => c.status == 'complete')
-                  .toList()
-                ..sort((a, b) => (b.completedAt ?? b.dueDate)
-                    .compareTo(a.completedAt ?? a.dueDate));
+              final done =
+                  myChores.where((c) => c.status == 'complete').toList()..sort(
+                    (a, b) => (b.completedAt ?? b.dueDate).compareTo(
+                      a.completedAt ?? a.dueDate,
+                    ),
+                  );
 
               final viewList = _activeTab == 'todo' ? todo : done;
 
               // Compute weekly points from chores completed since Monday.
               final weekStart = () {
                 final now = DateTime.now();
-                return DateTime(now.year, now.month, now.day - (now.weekday - 1));
+                return DateTime(
+                  now.year,
+                  now.month,
+                  now.day - (now.weekday - 1),
+                );
               }();
               final weeklyPoints = done
-                  .where((c) =>
-                      c.completedAt != null &&
-                      !c.completedAt!.isBefore(weekStart))
+                  .where(
+                    (c) =>
+                        c.completedAt != null &&
+                        !c.completedAt!.isBefore(weekStart),
+                  )
                   .fold(0, (sum, c) => sum + (c.pointsAwarded ?? c.pointValue));
 
               return Column(
@@ -125,10 +131,7 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                   ),
 
                   // Points banner
-                  _WeeklyPointsBanner(
-                    weeklyPoints: weeklyPoints,
-                    rank: rank,
-                  ),
+                  _WeeklyPointsBanner(weeklyPoints: weeklyPoints, rank: rank),
 
                   // Tab bar
                   _MyChoreTabBar(
@@ -146,39 +149,50 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                       duration: const Duration(milliseconds: 180),
                       switchInCurve: Curves.easeOut,
                       switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, animation) => FadeTransition(
-                        opacity: animation,
-                        child: child,
-                      ),
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(opacity: animation, child: child),
                       child: RefreshIndicator(
                         key: ValueKey(_activeTab),
                         color: _teal,
-                        onRefresh: () => ref
-                            .read(choresNotifierProvider(widget.householdId)
-                                .notifier)
-                            .refresh(),
+                        onRefresh: () async {
+                          await ref
+                              .read(
+                                choresNotifierProvider(
+                                  widget.householdId,
+                                ).notifier,
+                              )
+                              .refresh();
+                          ref.invalidate(
+                            weeklyLeaderboardProvider(widget.householdId),
+                          );
+                        },
                         child: _activeTab == 'todo' && todo.isEmpty
                             ? _AllCaughtUpState()
                             : _activeTab == 'done' && done.isEmpty
-                                ? const _NothingDoneState()
-                                : ListView.builder(
-                                    padding: const EdgeInsets.only(
-                                        top: 8, bottom: 100),
-                                    itemCount: viewList.length,
-                                    itemBuilder: (context, index) {
-                                      final chore = viewList[index];
-                                      return ChoreCard(
-                                        key: Key('my_chore_card_${chore.id}'),
-                                        chore: chore,
-                                        showAssignee: false,
-                                        onCompleteTap:
-                                            chore.status != 'complete'
-                                                ? () => _confirmComplete(
-                                                    context, chore)
-                                                : null,
-                                      );
-                                    },
-                                  ),
+                            ? const _NothingDoneState()
+                            : ListView.builder(
+                                padding: const EdgeInsets.only(
+                                  top: 8,
+                                  bottom: 100,
+                                ),
+                                itemCount: viewList.length,
+                                itemBuilder: (context, index) {
+                                  final chore = viewList[index];
+                                  return ChoreCard(
+                                    key: Key('my_chore_card_${chore.id}'),
+                                    chore: chore,
+                                    showAssignee: false,
+                                    onCompleteTap: chore.status != 'complete'
+                                        ? () => confirmCompleteChore(
+                                            context: context,
+                                            ref: ref,
+                                            householdId: widget.householdId,
+                                            chore: chore,
+                                          )
+                                        : null,
+                                  );
+                                },
+                              ),
                       ),
                     ),
                   ),
@@ -193,51 +207,6 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
         ),
       ),
     );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Mark-as-done confirmation flow
-  // ---------------------------------------------------------------------------
-
-  Future<void> _confirmComplete(
-    BuildContext context,
-    ChoreModel chore,
-  ) async {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-
-    final confirmed = await showChoreCompleteSheet(context, chore);
-
-    if (confirmed != true || !mounted) return;
-
-    try {
-      await ref
-          .read(choresNotifierProvider(widget.householdId).notifier)
-          .completeChore(chore.id);
-
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(
-          content: Text('You earned ${chore.pointValue} points!'),
-          backgroundColor: _teal,
-        ),
-      );
-    } on DioException catch (e) {
-      if (!mounted) return;
-      final statusCode = e.response?.statusCode;
-      final message = statusCode == 409
-          ? 'This chore was already completed.'
-          : statusCode == 403
-              ? 'You are not assigned to this chore.'
-              : 'Failed to complete chore. Please try again.';
-      scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
-    } catch (_) {
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(
-          content: Text('Failed to complete chore. Please try again.'),
-        ),
-      );
-    }
   }
 }
 
@@ -289,11 +258,15 @@ class _MyChoresHeader extends StatelessWidget {
             ),
           ),
           if (isAdmin)
-            GestureDetector(
+            AccessibleTap(
               onTap: () => context.pushNamed(
                 AppRoutes.householdManage,
                 pathParameters: {'householdId': householdId},
               ),
+              label: 'Manage household members',
+              customBorder: const CircleBorder(),
+              naturalSize: 40,
+              minTapSize: 48,
               child: Container(
                 width: 40,
                 height: 40,
@@ -302,8 +275,11 @@ class _MyChoresHeader extends StatelessWidget {
                   border: Border.all(color: _borderLight),
                   color: Colors.white,
                 ),
-                child: const Icon(Icons.group_rounded,
-                    size: 20, color: _darkText),
+                child: const Icon(
+                  Icons.group_rounded,
+                  size: 20,
+                  color: _darkText,
+                ),
               ),
             ),
         ],
@@ -387,7 +363,9 @@ class _WeeklyPointsBanner extends StatelessWidget {
               if (rank != null)
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 11, vertical: 6),
+                    horizontal: 11,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(999),
@@ -395,8 +373,11 @@ class _WeeklyPointsBanner extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.emoji_events_rounded,
-                          size: 13, color: Colors.white),
+                      const Icon(
+                        Icons.emoji_events_rounded,
+                        size: 13,
+                        color: Colors.white,
+                      ),
                       const SizedBox(width: 5),
                       Text(
                         'Rank #$rank',
@@ -484,9 +465,10 @@ class _TabButton extends StatelessWidget {
         : const Color(0xFFF1F6F5);
     final badgeText = isActive ? _teal : _inactiveTab;
 
-    return GestureDetector(
+    return AccessibleTap(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+      label: '$label ($count)',
+      selected: isActive,
       child: Container(
         padding: const EdgeInsets.only(bottom: 11),
         decoration: BoxDecoration(
@@ -511,8 +493,7 @@ class _TabButton extends StatelessWidget {
             ),
             const SizedBox(width: 7),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
               decoration: BoxDecoration(
                 color: badgeBg,
                 borderRadius: BorderRadius.circular(999),
@@ -627,10 +608,7 @@ class _NothingDoneState extends StatelessWidget {
               const SizedBox(height: 4),
               const Text(
                 'Complete a chore to see it here.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: _mutedText,
-                ),
+                style: TextStyle(fontSize: 14, color: _mutedText),
                 textAlign: TextAlign.center,
               ),
             ],

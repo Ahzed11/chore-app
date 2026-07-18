@@ -4,7 +4,7 @@
          (debug/profile builds inherit it from their own manifests). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="chore_app"
+        android:label="ChoreApp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:networkSecurityConfig="@xml/network_security_config">
@@ -28,6 +28,25 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Invite deep links (TASK-061): `choreapp:///join/<token>`.
+                 See `InviteResponse.deepLink` (flutter_app/lib/features/
+                 household/models/invite_model.dart) for why this is a
+                 custom scheme rather than an `https://` App Link — the
+                 invite URL is the backend's own domain, which this app has
+                 no claim to verify ownership of, so `autoVerify` App Links
+                 aren't an option here. Scheme-only matching (no host/path
+                 attributes) is intentional: an empty-authority URI like
+                 `choreapp:///join/abc` has no host component for Android's
+                 intent-filter data matching to key off, so all parsing of
+                 what follows the scheme is left to go_router — see the
+                 `redirect` handling of `/join/:token` in
+                 flutter_app/lib/router/app_router.dart. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="choreapp"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

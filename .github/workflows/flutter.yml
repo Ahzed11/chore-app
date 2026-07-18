@@ -2,6 +2,15 @@ name: Flutter
 
 # Analyze/test/build run on every branch push so regressions are caught
 # before merge (see TASK-069).
+#
+# Optional release signing (TASK-063): set these four repository secrets to
+# have the release APK signed with a real keystore instead of the Flutter
+# debug keystore (see android/app/build.gradle.kts for the fallback logic).
+# The build stays green with the debug-signed fallback if any is unset.
+#   ANDROID_KEYSTORE_BASE64   - base64-encoded .jks/.keystore file contents
+#   ANDROID_KEYSTORE_PASSWORD - keystore password
+#   ANDROID_KEY_ALIAS         - alias of the signing key within the keystore
+#   ANDROID_KEY_PASSWORD      - password for that key (often same as above)
 on:
   push:
     branches: ["**"]
@@ -12,6 +21,12 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+
+    # The secrets context is not allowed in step-level `if:`; evaluate the
+    # presence check here (where it is allowed) and gate the signing step
+    # on the resulting env var instead.
+    env:
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
 
     defaults:
       run:
@@ -29,17 +44,40 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Warnings and errors are fatal; info-level lints are reported but do
-      # not fail the build (pre-existing deprecation infos from newer stable
-      # SDKs are tracked in docs/tasks.md TASK-067).
+      # Fully strict: infos, warnings, and errors all fail the build
+      # (the deprecation-info backlog was cleared by TASK-067).
       - name: Analyse
-        run: flutter analyze --no-pub --no-fatal-infos
+        run: flutter analyze --no-pub
 
       - name: Run tests
         run: flutter test --no-pub
 
+      # Decodes the release keystore secret (if configured) to a temp file
+      # and exports the KEYSTORE_PATH/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD
+      # env vars that android/app/build.gradle.kts reads for release signing.
+      # Skipped entirely when the secret isn't set, so forks/PRs without
+      # access to repo secrets still build (debug-signed fallback).
+      - name: Configure release signing
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+          {
+            echo "KEYSTORE_PATH=$KEYSTORE_FILE"
+            echo "KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            echo "KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      # --build-number ties the APK's versionCode to the CI run number so
+      # successive CI-built APKs always upgrade-install over one another.
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --build-number=$GITHUB_RUN_NUMBER
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

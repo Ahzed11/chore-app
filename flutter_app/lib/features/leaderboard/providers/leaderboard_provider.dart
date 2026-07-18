@@ -1,48 +1,13 @@
-import 'dart:convert';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
-import '../../../core/auth/auth_state.dart';
 import '../models/leaderboard_model.dart';
 
-// ---------------------------------------------------------------------------
-// Current user ID provider
-// ---------------------------------------------------------------------------
-
-/// Decodes the `sub` claim from the stored JWT without verifying the
-/// signature — only used for UI highlighting of the current user's row.
-///
-/// Returns null when the user is not authenticated or the token cannot be
-/// parsed.
-final currentUserIdProvider = Provider<String?>((ref) {
-  final token = ref.watch(authNotifierProvider).token;
-  if (token == null || token.isEmpty) return null;
-
-  try {
-    final parts = token.split('.');
-    if (parts.length < 2) return null;
-
-    // Base64-url decode the payload section (index 1).
-    String payload = parts[1];
-    // Normalise padding to a multiple of 4.
-    switch (payload.length % 4) {
-      case 2:
-        payload += '==';
-      case 3:
-        payload += '=';
-    }
-    // Convert URL-safe alphabet to standard base64.
-    payload = payload.replaceAll('-', '+').replaceAll('_', '/');
-
-    final decoded = utf8.decode(base64.decode(payload));
-    final claims = jsonDecode(decoded) as Map<String, dynamic>;
-    return claims['sub'] as String?;
-  } catch (_) {
-    return null;
-  }
-});
+// Current-user-ID lookup used to be duplicated here as a client-side JWT
+// decode of the stored access token. Standardized on `currentUserProvider`
+// (`GET /users/me`, `features/auth/providers/current_user_provider.dart`)
+// instead — see TASK-067 F-22.
 
 // ---------------------------------------------------------------------------
 // Scope notifier

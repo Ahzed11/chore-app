@@ -1,4 +1,23 @@
+import logging
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Substrings that indicate JWT_SECRET was left at (or copied from) a
+# documentation/placeholder value instead of being replaced with a real secret.
+_PLACEHOLDER_SECRET_MARKERS = (
+    "change-me",
+    "change_me",
+    "changeme",
+    "replace_with",
+    "replace-with",
+    "replaceme",
+    "your-secret",
+    "your_secret",
+    "example-secret",
+)
 
 
 class Settings(BaseSettings):
@@ -10,7 +29,14 @@ class Settings(BaseSettings):
     # JWT
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRY_DAYS: int = 7
+    # Access tokens are short-lived by design — a stolen access token should
+    # stay valid for minutes, not days. Long-lived sessions are handled by the
+    # rotated refresh-token flow instead.
+    JWT_EXPIRY_MINUTES: int = 30
+    # Deprecated: superseded by JWT_EXPIRY_MINUTES. Kept only so existing .env
+    # files that still set this don't break; if explicitly set, it is honored
+    # (converted to minutes) and a deprecation warning is logged at startup.
+    JWT_EXPIRY_DAYS: int | None = None
 
     # Refresh tokens
     REFRESH_TOKEN_TTL_DAYS: int = 30
@@ -27,11 +53,96 @@ class Settings(BaseSettings):
     # Chore instance generation
     INSTANCE_GENERATION_DAYS_AHEAD: int = 7
 
+    # Backfill grace window (days): after downtime, instance generation starts
+    # at max(first_due_date, today - GRACE_DAYS) so a stale definition cannot
+    # flood the household with dozens of instantly-overdue instances.
+    GRACE_DAYS: int = 3
+
     # Debug / development
     DEBUG: bool = False
 
     # CORS
     CORS_ALLOWED_ORIGINS: list[str] = []
+
+    # Rate limiting (TASK-031): protects the unauthenticated, credential-bearing
+    # auth endpoints (login/register/refresh) from brute-force and
+    # credential-stuffing. Keyed per client IP via the ASGI scope's
+    # request.client — which uvicorn rewrites from X-Forwarded-For itself when
+    # run with --proxy-headers behind a trusted reverse proxy — so the app
+    # never needs to parse forwarded headers directly. Limit strings use the
+    # `limits` package's "<count>/<period>" syntax (e.g. "5/minute").
+    #
+    # RATE_LIMIT_ENABLED exists mainly so the test suite can disable rate
+    # limiting globally (see backend/tests/conftest.py) — the 200+ existing
+    # tests that log in/register repeatedly would otherwise flake against
+    # these caps. Individual limit strings are read per-request (not cached
+    # at startup), so tests can also override them to exercise 429 behavior
+    # with tight, fast limits.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN: str = "5/minute"
+    RATE_LIMIT_REGISTER: str = "10/hour"
+    RATE_LIMIT_REFRESH: str = "30/minute"
+
+    # Chore reminder notifications (TASK-081): optional push of a daily
+    # due/overdue summary via a self-hostable ntfy or Gotify server. The
+    # feature is entirely disabled — no network calls, no extra queries — when
+    # NOTIFY_URL is unset, which is also the default so existing deployments
+    # see no behavior change.
+    #
+    # NOTIFY_URL:
+    #   - ntfy: the full topic URL to POST to, e.g. https://ntfy.sh/my-topic
+    #     or https://ntfy.example.com/chores.
+    #   - gotify: the base server URL, e.g. https://gotify.example.com — the
+    #     app appends /message itself.
+    # NOTIFY_TOKEN: optional. ntfy sends it as a Bearer Authorization header
+    #   (needed for access-controlled topics); Gotify sends it as the
+    #   `token` query parameter on POST /message (an application token).
+    # NOTIFY_KIND: which backend's request shape to use.
+    NOTIFY_URL: str | None = None
+    NOTIFY_TOKEN: str | None = None
+    NOTIFY_KIND: str = "ntfy"
+    NOTIFY_TIMEOUT_SECONDS: float = 5.0
+
+    @field_validator("NOTIFY_KIND")
+    @classmethod
+    def _validate_notify_kind(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ("ntfy", "gotify"):
+            raise ValueError('NOTIFY_KIND must be "ntfy" or "gotify"')
+        return normalized
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def _validate_jwt_secret(cls, value: str) -> str:
+        """Reject short or placeholder JWT secrets so the app fails fast at startup."""
+        if len(value) < 32:
+            raise ValueError(
+                "JWT_SECRET must be at least 32 characters long. Generate one with: "
+                'python -c "import secrets; print(secrets.token_hex(32))"'
+            )
+        normalized = value.strip().lower()
+        for marker in _PLACEHOLDER_SECRET_MARKERS:
+            if marker in normalized:
+                raise ValueError(
+                    "JWT_SECRET looks like a placeholder copied from .env.example. "
+                    "Set a real random secret before starting the application."
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _apply_deprecated_jwt_expiry_days(self) -> "Settings":
+        """Honor an explicitly-set JWT_EXPIRY_DAYS as a fallback, with a warning."""
+        if self.JWT_EXPIRY_DAYS is not None:
+            effective_minutes = self.JWT_EXPIRY_DAYS * 24 * 60
+            logger.warning(
+                "JWT_EXPIRY_DAYS is deprecated and will be removed in a future release; "
+                "use JWT_EXPIRY_MINUTES instead. Honoring JWT_EXPIRY_DAYS=%s "
+                "(%s minutes) for backward compatibility.",
+                self.JWT_EXPIRY_DAYS,
+                effective_minutes,
+            )
+            self.JWT_EXPIRY_MINUTES = effective_minutes
+        return self
 
 
 settings = Settings()

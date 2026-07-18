@@ -2,7 +2,9 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,7 @@ from app.schemas.household import (
 )
 
 router = APIRouter(prefix="/households", tags=["households"])
+logger = structlog.get_logger()
 
 
 @router.post("", response_model=HouseholdResponse, status_code=status.HTTP_201_CREATED)
@@ -154,3 +157,44 @@ async def update_household(
         name=household.name,
         created_at=household.created_at,
     )
+
+
+@router.delete("/{household_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_household(
+    household_id: uuid.UUID,
+    confirm: str = Query(
+        ...,
+        description="Must exactly match the household's current name, to guard "
+        "against accidental deletion.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _membership: HouseholdMembership = Depends(require_admin),
+) -> None:
+    """Permanently delete a household and all of its data (admin only, TASK-078).
+
+    Requires ``?confirm=<household name>`` to match the household's current
+    name exactly (400 otherwise). Hard-deletes the household row; FK
+    ``ondelete="CASCADE"`` rules remove memberships, invite tokens, chore
+    definitions/instances, and point ledger entries in the same statement.
+    """
+    result = await db.execute(select(Household).where(Household.id == household_id))
+    household = result.scalar_one_or_none()
+
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Household not found",
+        )
+
+    if confirm != household.name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation text does not match the household name",
+        )
+
+    # Core DELETE so the database-level ON DELETE CASCADE rules remove
+    # memberships, invites, chores, and ledger rows (the ORM relationships
+    # are not configured with passive_deletes).
+    await db.execute(sql_delete(Household).where(Household.id == household_id))
+    await db.flush()
+    logger.info("household.deleted", household_id=str(household_id))

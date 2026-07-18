@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/api/friendly_error.dart';
 import '../../../core/auth/auth_state.dart';
+import '../../../router/app_router.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../providers/household_provider.dart';
@@ -26,6 +28,13 @@ class HouseholdDashboardScreen extends ConsumerWidget {
             tooltip: 'Join by invite link',
             onPressed: () => _showJoinDialog(context, ref),
           ),
+          // Server settings button
+          IconButton(
+            key: const Key('dashboard_server_settings_button'),
+            icon: const Icon(Icons.dns_outlined),
+            tooltip: 'Server settings',
+            onPressed: () => goToChangeServer(context),
+          ),
           // Logout button
           IconButton(
             key: const Key('logout_button'),
@@ -38,7 +47,7 @@ class HouseholdDashboardScreen extends ConsumerWidget {
       body: householdsAsync.when(
         loading: () => const LoadingWidget(),
         error: (error, _) => AppErrorWidget(
-          message: error.toString(),
+          error: error,
           onRetry: () => ref.invalidate(householdsNotifierProvider),
         ),
         data: (households) {
@@ -277,7 +286,7 @@ class _JoinHouseholdDialogState extends ConsumerState<_JoinHouseholdDialog> {
       if (parent.mounted) {
         ScaffoldMessenger.of(parent).showSnackBar(
           SnackBar(
-            content: Text(e.toString()),
+            content: Text(friendlyErrorMessage(e)),
             backgroundColor: Theme.of(parent).colorScheme.error,
           ),
         );

@@ -4,23 +4,34 @@ TASK-012: Provides generate_chore_instances, flag_overdue_instances, run_daily_j
 start_scheduler, and stop_scheduler. Integrate with FastAPI's lifespan event — see the
 comment block at the bottom of this module for the exact snippet to add to main.py.
 """
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dateutil.relativedelta import relativedelta
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models.chore_definition import ChoreDefinition
 from app.models.chore_instance import ChoreInstance
+from app.models.household import Household
+from app.models.refresh_token import RefreshToken
+from app.models.revoked_token import RevokedToken
+from app.models.user import User
 from app.services.assignment import AssignmentService, RoundRobinStrategy
+from app.services.notifications import HouseholdReminderSummary, send_daily_reminders
 
 logger = structlog.get_logger()
 
 _scheduler: AsyncIOScheduler | None = None
+
+# If the process was suspended (or the event loop stalled) across the scheduled
+# midnight run, still fire the job as long as we are within this many seconds
+# of the scheduled time (TASK-073).
+MISFIRE_GRACE_SECONDS = 6 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +53,7 @@ def _compute_due_dates(
     first_due_date: date,
     recurrence_rule: dict,
     horizon: date,
+    floor: date | None = None,
 ) -> list[date]:
     """Return every due date in [first_due_date, horizon] for the given rule.
 
@@ -51,6 +63,10 @@ def _compute_due_dates(
 
     Uses ``timedelta`` for days/weeks and ``dateutil.relativedelta`` for months
     so that month-end arithmetic is handled correctly.
+
+    When ``floor`` is given, due dates earlier than it are skipped (backfill
+    cap, TASK-073).  Stepping still starts at ``first_due_date`` so the
+    recurrence phase is preserved — capping never shifts the cadence.
     """
     interval_unit: str = recurrence_rule.get("interval_unit", "days")
     interval_n: int = int(recurrence_rule.get("interval_n", 1))
@@ -71,7 +87,8 @@ def _compute_due_dates(
     due_dates: list[date] = []
     current = first_due_date
     while current <= horizon:
-        due_dates.append(current)
+        if floor is None or current >= floor:
+            due_dates.append(current)
         current = current + delta
 
     return due_dates
@@ -90,10 +107,17 @@ async def generate_chore_instances(session: AsyncSession) -> None:
     for any date that does not already have one.  Running this function multiple
     times on the same day is **idempotent** — no duplicate rows are ever created.
 
-    Auto-assignment is applied to each new instance via ``RoundRobinStrategy``.
+    TASK-073 hardening:
+    - Backfill is capped at ``max(first_due_date, today - GRACE_DAYS)`` so that
+      extended downtime (or a definition created with an old date) cannot flood
+      a household with dozens of instantly-overdue instances.
+    - New instances are batch-assigned with a single household row lock per
+      household per run (``AssignmentService.redistribute_chores_bulk``) instead
+      of one ``SELECT FOR UPDATE`` per instance.
     """
     today = _today()
     horizon = today + timedelta(days=settings.INSTANCE_GENERATION_DAYS_AHEAD)
+    backfill_floor = today - timedelta(days=settings.GRACE_DAYS)
 
     # Load all active recurring definitions in a single query.
     result = await session.execute(
@@ -103,8 +127,6 @@ async def generate_chore_instances(session: AsyncSession) -> None:
         )
     )
     definitions = result.scalars().all()
-
-    assignment_service = AssignmentService(RoundRobinStrategy())
 
     # Single bulk query — fetch all (definition_id, due_date) pairs that already
     # have a ChoreInstance for any of the active definitions.  This replaces the
@@ -117,6 +139,10 @@ async def generate_chore_instances(session: AsyncSession) -> None:
         existing_pairs: set[tuple] = set(existing_result.all())
     else:
         existing_pairs = set()
+
+    # Collect new (unassigned) instances grouped by household so assignment can
+    # be batched with one lock acquisition per household below.
+    new_by_household: dict[uuid.UUID, list[ChoreInstance]] = {}
 
     for definition in definitions:
         if not definition.recurrence_rule:
@@ -131,42 +157,57 @@ async def generate_chore_instances(session: AsyncSession) -> None:
             definition.first_due_date,
             definition.recurrence_rule,
             horizon,
+            floor=backfill_floor,
         )
 
         for due_date in due_dates:
             if (definition.id, due_date) in existing_pairs:
                 continue  # already exists — idempotent guard
 
-            assignee_id = await assignment_service.auto_assign(
-                definition.household_id, session
-            )
-
             instance = ChoreInstance(
+                id=uuid.uuid4(),
                 definition_id=definition.id,
                 household_id=definition.household_id,
-                assignee_id=assignee_id,
+                assignee_id=None,
                 assigned_manually=False,
                 due_date=due_date,
                 status="pending",
             )
             session.add(instance)
+            new_by_household.setdefault(definition.household_id, []).append(instance)
 
             # Track locally so a second iteration within the same call cannot
             # re-create the same (definition, date) pair before the flush hits
             # the database.
             existing_pairs.add((definition.id, due_date))
 
+    # Batch auto-assignment: one SELECT FOR UPDATE on the household row per
+    # household per run, cycling members in Python and writing the rotation
+    # pointer once (same pattern as AssignmentService.redistribute_chores_bulk).
+    assignment_service = AssignmentService(RoundRobinStrategy())
+    for household_id, instances in new_by_household.items():
+        assignments = await assignment_service.redistribute_chores_bulk(
+            [inst.id for inst in instances], household_id, session
+        )
+        for inst in instances:
+            inst.assignee_id = assignments.get(inst.id)
+
     await session.flush()
 
 
-async def flag_overdue_instances(session: AsyncSession) -> None:
+async def flag_overdue_instances(session: AsyncSession) -> list[uuid.UUID]:
     """Batch-update pending ChoreInstances whose due_date has already passed.
 
     Only rows with ``status='pending'`` are touched.  Instances that are
     ``'complete'`` or ``'cancelled'`` are never modified.
+
+    Returns the ids of the instances that were flagged *in this call* (i.e.
+    just transitioned pending -> overdue) — used by the notification step
+    (TASK-081) to distinguish "newly overdue" from instances that were
+    already overdue before this run.
     """
     today = _today()
-    await session.execute(
+    result = await session.execute(
         update(ChoreInstance)
         .where(
             ChoreInstance.status == "pending",
@@ -174,7 +215,93 @@ async def flag_overdue_instances(session: AsyncSession) -> None:
         )
         .values(status="overdue")
         .execution_options(synchronize_session=False)
+        .returning(ChoreInstance.id)
     )
+    return [row[0] for row in result.all()]
+
+
+async def cleanup_expired_tokens(session: AsyncSession) -> None:
+    """Delete expired ``revoked_tokens`` and ``refresh_tokens`` rows.
+
+    Both tables grow forever otherwise: every login adds a ``refresh_tokens``
+    row and every logout adds a ``revoked_tokens`` row.  Once a row's
+    ``expires_at`` is in the past it no longer serves any purpose — an expired
+    JWT is already rejected on ``exp`` alone, and an expired refresh token is
+    already rejected by the refresh endpoint — so it is safe to purge.
+    """
+    now = datetime.now(timezone.utc)
+    revoked_result = await session.execute(
+        delete(RevokedToken).where(RevokedToken.expires_at < now)
+    )
+    refresh_result = await session.execute(
+        delete(RefreshToken).where(RefreshToken.expires_at < now)
+    )
+    logger.info(
+        "scheduler.token_cleanup",
+        revoked_tokens_deleted=revoked_result.rowcount,
+        refresh_tokens_deleted=refresh_result.rowcount,
+    )
+
+
+async def _gather_reminder_summaries(
+    session: AsyncSession, newly_overdue_ids: list[uuid.UUID]
+) -> list[HouseholdReminderSummary]:
+    """Build per-household due-today/newly-overdue summaries (TASK-081).
+
+    Only called when ``NOTIFY_URL`` is configured, so a disabled feature
+    costs zero extra queries.  Must run *before* ``session.commit()`` so it
+    sees the statuses ``flag_overdue_instances`` just wrote in this same
+    transaction (that update uses ``synchronize_session=False``, so a fresh
+    SELECT — not the ORM identity map — is what reflects it).
+    """
+    today = _today()
+
+    base_query = (
+        select(
+            ChoreInstance.household_id,
+            Household.name,
+            ChoreDefinition.title,
+            User.display_name,
+        )
+        .select_from(ChoreInstance)
+        .join(Household, ChoreInstance.household_id == Household.id)
+        .outerjoin(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
+        .outerjoin(User, ChoreInstance.assignee_id == User.id)
+    )
+
+    due_today_rows = (
+        await session.execute(
+            base_query.where(
+                ChoreInstance.status == "pending",
+                ChoreInstance.due_date == today,
+            )
+        )
+    ).all()
+
+    overdue_rows: list = []
+    if newly_overdue_ids:
+        overdue_rows = (
+            await session.execute(base_query.where(ChoreInstance.id.in_(newly_overdue_ids)))
+        ).all()
+
+    summaries: dict[uuid.UUID, HouseholdReminderSummary] = {}
+
+    def _summary_for(household_id: uuid.UUID, household_name: str) -> HouseholdReminderSummary:
+        if household_id not in summaries:
+            summaries[household_id] = HouseholdReminderSummary(
+                household_id=household_id, household_name=household_name
+            )
+        return summaries[household_id]
+
+    for household_id, household_name, chore_title, assignee_name in due_today_rows:
+        summary = _summary_for(household_id, household_name)
+        summary.due_today.append((chore_title or "Chore", assignee_name or "Unassigned"))
+
+    for household_id, household_name, chore_title, assignee_name in overdue_rows:
+        summary = _summary_for(household_id, household_name)
+        summary.newly_overdue.append((chore_title or "Chore", assignee_name or "Unassigned"))
+
+    return list(summaries.values())
 
 
 async def run_daily_job() -> None:
@@ -189,6 +316,7 @@ async def run_daily_job() -> None:
     the application is deployed with multiple Uvicorn workers.
     """
     logger.info("scheduler.daily_job.started")
+    reminder_summaries: list[HouseholdReminderSummary] = []
     async with AsyncSessionLocal() as session:
         # Try to acquire advisory lock — only one worker runs the job.
         # The lock is held for the duration of the transaction and released
@@ -203,13 +331,29 @@ async def run_daily_job() -> None:
 
         try:
             await generate_chore_instances(session)
-            await flag_overdue_instances(session)
+            newly_overdue_ids = await flag_overdue_instances(session)
+            await cleanup_expired_tokens(session)
+
+            # Gather notification data (TASK-081) *inside* the transaction —
+            # before commit — so it reflects this run's changes. The actual
+            # HTTP delivery happens after commit, below, outside the advisory
+            # lock: a slow/unreachable notify endpoint must never hold the
+            # lock open and block other workers.
+            if settings.NOTIFY_URL:
+                reminder_summaries = await _gather_reminder_summaries(session, newly_overdue_ids)
+
             await session.commit()
             logger.info("scheduler.daily_job.completed")
         except Exception:
             await session.rollback()
             logger.exception("Daily scheduler job failed; all changes rolled back")
             raise
+
+    # Best-effort: delivery failures are caught and logged inside
+    # send_daily_reminders and must never fail the job (they run after the
+    # job's own commit has already succeeded).
+    if reminder_summaries:
+        await send_daily_reminders(reminder_summaries)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +379,8 @@ def start_scheduler() -> None:
         minute=0,
         id="daily_chore_scheduler",
         replace_existing=True,
+        misfire_grace_time=MISFIRE_GRACE_SECONDS,
+        coalesce=True,
     )
     _scheduler.start()
     logger.info(

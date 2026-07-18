@@ -1,9 +1,11 @@
+import 'package:chore_app/features/auth/providers/current_user_provider.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
+import 'package:chore_app/features/household/models/invite_model.dart';
 import 'package:chore_app/features/household/models/member_model.dart';
 import 'package:chore_app/features/household/providers/household_provider.dart';
+import 'package:chore_app/features/household/providers/invite_provider.dart';
 import 'package:chore_app/features/household/providers/members_provider.dart';
 import 'package:chore_app/features/household/screens/household_management_screen.dart';
-import 'package:chore_app/features/leaderboard/providers/leaderboard_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,6 +41,20 @@ MemberModel _member({
     displayName: displayName,
     role: role,
     joinedAt: DateTime(2025, 3, 1),
+  );
+}
+
+InviteTokenSummary _inviteToken({
+  String id = 'inv-1',
+  String tokenPreview = 'aB3dEf12***',
+  DateTime? createdAt,
+  DateTime? expiresAt,
+}) {
+  return InviteTokenSummary(
+    id: id,
+    tokenPreview: tokenPreview,
+    createdAt: createdAt ?? DateTime.now().toUtc(),
+    expiresAt: expiresAt ?? DateTime.now().toUtc().add(const Duration(hours: 24)),
   );
 }
 
@@ -107,6 +123,44 @@ class _FakeMembersNotifierSoleAdmin extends MembersNotifier {
   }
 }
 
+/// A synchronous fake `InviteApi` that tracks calls and serves a mutable
+/// in-memory list of active invites, mirroring the real backend's behavior
+/// of the list reflecting revocations after `ref.invalidate`.
+class _FakeInviteApi implements InviteApi {
+  _FakeInviteApi({List<InviteTokenSummary>? invites, this.throwOnList = false})
+      : _invites = List.of(invites ?? const []);
+
+  final List<InviteTokenSummary> _invites;
+  final bool throwOnList;
+
+  int generateCallCount = 0;
+  int listCallCount = 0;
+  final List<String> revokedIds = [];
+
+  @override
+  Future<InviteResponse> generateInvite(String householdId) async {
+    generateCallCount++;
+    return InviteResponse(
+      token: 'new-token',
+      inviteUrl: 'https://app.example.com/invite/new-token',
+      expiresAt: DateTime.now().toUtc().add(const Duration(hours: 24)),
+    );
+  }
+
+  @override
+  Future<List<InviteTokenSummary>> listInvites(String householdId) async {
+    listCallCount++;
+    if (throwOnList) throw Exception('Network error');
+    return List.of(_invites);
+  }
+
+  @override
+  Future<void> revokeInvite(String householdId, String inviteId) async {
+    revokedIds.add(inviteId);
+    _invites.removeWhere((invite) => invite.id == inviteId);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Widget builder helpers
 // ---------------------------------------------------------------------------
@@ -149,6 +203,7 @@ Widget _buildScreen({
   String? currentUserId = 'u99', // different from any member by default
   HouseholdsNotifier Function()? householdsNotifierFactory,
   MembersNotifier Function()? membersNotifierFactory,
+  InviteApi? inviteApi,
 }) {
   final router = _testRouter(
     householdId: householdId,
@@ -165,7 +220,11 @@ Widget _buildScreen({
       membersNotifierProvider.overrideWith(
         membersNotifierFactory ?? () => _FakeMembersNotifier(members),
       ),
-      currentUserIdProvider.overrideWithValue(currentUserId),
+      currentUserProvider.overrideWith(
+        (ref) async =>
+            UserProfile(id: currentUserId ?? '', displayName: 'Test User'),
+      ),
+      if (inviteApi != null) inviteApiProvider.overrideWithValue(inviteApi),
     ],
     child: MaterialApp.router(
       theme: AppTheme.lightTheme,
@@ -530,6 +589,177 @@ void main() {
       // Grey shade 200 has similar R, G, B values.
       final diff = (r - g).abs() + (g - b).abs();
       expect(diff, lessThan(20));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Invite management (TASK-053)
+  // ---------------------------------------------------------------------------
+
+  group('Invite management (TASK-053)', () {
+    testWidgets('non-admin members do not see the invite section',
+        (tester) async {
+      final households = [_household(id: householdId, role: 'member')];
+      final members = <MemberModel>[];
+
+      await _pumpScreen(tester,
+        _buildScreen(households: households, members: members),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('invite_tile')), findsNothing);
+    });
+
+    testWidgets('opening the invite section only lists invites, never '
+        'generates one', (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(invites: [_inviteToken()]);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(fakeApi.listCallCount, greaterThanOrEqualTo(1));
+      expect(fakeApi.generateCallCount, 0);
+    });
+
+    testWidgets('shows "No active invites" empty state when the list is empty',
+        (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(invites: const []);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('no_active_invites')), findsOneWidget);
+      expect(find.text('No active invites'), findsOneWidget);
+    });
+
+    testWidgets('lists active invites with masked preview and expiry',
+        (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(invites: [
+        _inviteToken(id: 'inv-1', tokenPreview: 'aB3dEf12***'),
+      ]);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('invite_row_inv-1')), findsOneWidget);
+      expect(find.text('aB3dEf12***'), findsOneWidget);
+      expect(find.textContaining('Expires'), findsOneWidget);
+    });
+
+    testWidgets('revoking an invite calls the API and refreshes the list',
+        (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(invites: [
+        _inviteToken(id: 'inv-1'),
+        _inviteToken(id: 'inv-2', tokenPreview: 'ZzZzZzZz***'),
+      ]);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('invite_row_inv-1')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('revoke_invite_inv-1')));
+      await tester.pumpAndSettle();
+
+      expect(fakeApi.revokedIds, contains('inv-1'));
+      // List refreshed from the server: the revoked row is gone, the other
+      // active invite remains.
+      expect(find.byKey(const Key('invite_row_inv-1')), findsNothing);
+      expect(find.byKey(const Key('invite_row_inv-2')), findsOneWidget);
+    });
+
+    testWidgets('generate button creates a new invite and shows its link',
+        (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(invites: const []);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('https://app.example.com/invite/new-token'),
+          findsNothing);
+
+      await tester.tap(find.byKey(const Key('generate_invite_button')));
+      await tester.pumpAndSettle();
+
+      expect(fakeApi.generateCallCount, 1);
+      expect(find.text('https://app.example.com/invite/new-token'),
+          findsOneWidget);
+    });
+
+    testWidgets('shows an error message when listing invites fails',
+        (tester) async {
+      final households = [_household(id: householdId)];
+      final members = <MemberModel>[];
+      final fakeApi = _FakeInviteApi(throwOnList: true);
+
+      await _pumpScreen(tester,
+        _buildScreen(
+          households: households,
+          members: members,
+          inviteApi: fakeApi,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('invite_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('invites_error')), findsOneWidget);
     });
   });
 }

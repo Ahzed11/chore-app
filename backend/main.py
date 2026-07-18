@@ -6,6 +6,9 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -19,7 +22,8 @@ from app.api.leaderboard import router as leaderboard_router
 from app.api.members import router as members_router
 from app.api.users import router as users_router
 from app.core.config import settings
-from app.tasks.scheduler import start_scheduler, stop_scheduler
+from app.core.rate_limit import limiter
+from app.tasks.scheduler import run_daily_job, start_scheduler, stop_scheduler
 
 structlog.configure(
     processors=[
@@ -34,9 +38,23 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(),
 )
 
+logger = structlog.get_logger()
+
+
+logger = structlog.get_logger()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # TASK-073: run the daily job once at startup so that missed midnights
+    # (reboot, power cut) are caught up immediately.  run_daily_job is
+    # idempotent and advisory-locked, so this is safe with multiple workers.
+    # A failure here (e.g. DB briefly unavailable) must not prevent the API
+    # from starting — the cron trigger will retry at the next midnight.
+    try:
+        await run_daily_job()
+    except Exception:
+        logger.exception("scheduler.startup_run.failed")
     start_scheduler()
     yield
     stop_scheduler()
@@ -75,14 +93,25 @@ app = FastAPI(
     openapi_url=openapi_url,
 )
 
+# TASK-031: rate limiting on auth endpoints. `limiter` (app/core/rate_limit.py)
+# is keyed per client IP; app.state.limiter is where slowapi's exception
+# handler/middleware look it up, and the per-route @limiter.limit(...)
+# decorators live on the individual routes in app/api/auth.py.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Middleware is applied in reverse registration order (last added = outermost).
 # SecurityHeadersMiddleware is registered first (innermost layer).
 # RequestIDMiddleware is registered second — wraps SecurityHeaders, seeds the
 # structlog context with a per-request UUID, and echoes it in X-Request-ID.
+# SlowAPIMiddleware is registered third — required by slowapi so its exception
+# handler machinery is wired into the ASGI stack; the actual per-route auth
+# limits are enforced by the @limiter.limit(...) decorators themselves.
 # CORSMiddleware is registered last (outermost layer) so it handles preflight
 # before any other middleware runs.
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
@@ -94,7 +123,22 @@ app.add_middleware(
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
-    """Convert any unhandled DB IntegrityError (unique/FK violations) to HTTP 409."""
+    """Convert any unhandled DB IntegrityError (unique/FK violations) to HTTP 409.
+
+    This is a last-resort safety net for constraint violations that a route
+    did not already anticipate (e.g. a race between a pre-check and the
+    insert). It is intentionally broad, so the offending constraint is always
+    logged here — without that, a real bug (wrong constraint tripped, FK
+    violation from a coding error, etc.) would be silently flattened into a
+    generic 409 and become invisible.
+    """
+    constraint = getattr(exc.orig, "constraint_name", None)
+    logger.warning(
+        "db.integrity_error",
+        path=request.url.path,
+        constraint=constraint,
+        detail=str(exc.orig) if exc.orig is not None else str(exc),
+    )
     return JSONResponse(status_code=409, content={"detail": "Resource conflict"})
 
 app.include_router(health.router)
