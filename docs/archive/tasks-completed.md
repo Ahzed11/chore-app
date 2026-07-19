@@ -2050,3 +2050,24 @@ Nothing notifies assignees of due or overdue chores — `flag_overdue_instances`
 - [ ] Notification failure never aborts instance generation.
 
 ---
+
+---
+
+## TASK-082: DevOps — Multi-Arch (ARM64) Backend Image
+
+**Domain**: DevOps  
+**Priority**: Medium  
+**Depends on**: TASK-069  
+**Source**: self-hosting request (ARM NAS support)
+
+The GHCR image was built for linux/amd64 only, so ARM hosts (ARM NAS models, Raspberry Pi) could not run the published image.
+
+**Steps**:
+1. Add `docker/setup-qemu-action@v3` before buildx in the `build` job of `.github/workflows/ci.yml`.
+2. Add `platforms: linux/amd64,linux/arm64` to the `docker/build-push-action` step so a multi-arch manifest is pushed.
+
+**Acceptance criteria**:
+- [x] `docker buildx imagetools inspect ghcr.io/ahzed11/chore-app-api:latest` lists both amd64 and arm64 after the next main push.
+- [x] Existing amd64 deployments keep pulling unchanged.
+
+---
