@@ -611,6 +611,11 @@ class _ChoreListBottomNav extends StatelessWidget {
               AppRoutes.leaderboard,
               pathParameters: {'householdId': householdId},
             );
+          case 3:
+            context.goNamed(
+              AppRoutes.groceryList,
+              pathParameters: {'householdId': householdId},
+            );
         }
       },
       items: const [
@@ -625,6 +630,10 @@ class _ChoreListBottomNav extends StatelessWidget {
         BottomNavigationBarItem(
           icon: Icon(Icons.emoji_events_rounded),
           label: 'Leaderboard',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.shopping_cart_rounded),
+          label: 'Groceries',
         ),
       ],
     );

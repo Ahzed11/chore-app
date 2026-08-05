@@ -1096,6 +1096,11 @@ class _LeaderboardBottomNav extends StatelessWidget {
             );
           case 2:
             break; // Already on leaderboard.
+          case 3:
+            context.goNamed(
+              AppRoutes.groceryList,
+              pathParameters: {'householdId': householdId},
+            );
         }
       },
       items: const [
@@ -1110,6 +1115,10 @@ class _LeaderboardBottomNav extends StatelessWidget {
         BottomNavigationBarItem(
           icon: Icon(Icons.leaderboard_rounded),
           label: 'Leaderboard',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.shopping_cart_rounded),
+          label: 'Groceries',
         ),
       ],
     );

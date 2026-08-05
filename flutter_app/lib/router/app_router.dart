@@ -10,6 +10,7 @@ import '../features/chores/models/chore_form_init_data.dart';
 import '../features/chores/screens/chore_list_screen.dart';
 import '../features/chores/screens/create_chore_screen.dart';
 import '../features/chores/screens/my_chores_screen.dart';
+import '../features/groceries/screens/grocery_list_screen.dart';
 import '../features/household/providers/pending_join_provider.dart';
 import '../features/household/screens/household_dashboard_screen.dart';
 import '../features/household/screens/household_management_screen.dart';
@@ -33,6 +34,7 @@ class AppRoutes {
   static const String choreList = 'chore-list';
   static const String myChores = 'my-chores';
   static const String leaderboard = 'leaderboard';
+  static const String groceryList = 'grocery-list';
   static const String householdManage = 'household-manage';
   static const String createChore = 'create-chore';
   static const String joinInvite = 'join-invite';
@@ -237,6 +239,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         pageBuilder: (context, state) {
           final id = state.pathParameters['householdId']!;
           return _tabPage(state, LeaderboardScreen(householdId: id));
+        },
+      ),
+      GoRoute(
+        path: '/households/:householdId/groceries',
+        name: AppRoutes.groceryList,
+        pageBuilder: (context, state) {
+          final id = state.pathParameters['householdId']!;
+          return _tabPage(state, GroceryListScreen(householdId: id));
         },
       ),
 
