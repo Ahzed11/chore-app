@@ -29,4 +29,11 @@ class ApiEndpoints {
       '/households/$householdId/invites/$inviteId';
   static String choreAssignee(String householdId, String instanceId) =>
       '/households/$householdId/chores/$instanceId/assignee';
+  static String householdGroceries(String id) => '/households/$id/groceries';
+  static String groceryItem(String hId, String itemId) =>
+      '/households/$hId/groceries/$itemId';
+  static String groceryPurchase(String hId, String itemId) =>
+      '/households/$hId/groceries/$itemId/purchase';
+  static String groceryUnpurchase(String hId, String itemId) =>
+      '/households/$hId/groceries/$itemId/unpurchase';
 }
