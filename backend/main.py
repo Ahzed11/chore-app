@@ -16,6 +16,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.api import auth, health
 from app.api.chores import router as chores_router
+from app.api.groceries import router as groceries_router
 from app.api.households import router as households_router
 from app.api.invites import router as invites_router
 from app.api.leaderboard import router as leaderboard_router
@@ -144,6 +145,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(chores_router)
+app.include_router(groceries_router)
 app.include_router(users_router)
 app.include_router(households_router)
 app.include_router(invites_router)
