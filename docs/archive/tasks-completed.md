@@ -2802,3 +2802,33 @@ build) on every branch push.
 
 ---
 
+## TASK-089: Docs — Remove Claude-specific artifacts
+
+**Domain**: Documentation  
+**Depends on**: TASK-088 (`.hermes.md` must exist first so nothing is lost)  
+
+### Files to remove
+
+1. **Delete `/home/hermes/chore-app/CLAUDE.md`** — replaced by `.hermes.md` (higher priority in Hermes's discovery chain, created in TASK-088). Keeping both would mean Hermes loads `.hermes.md` first and never reaches `CLAUDE.md`, making the latter dead weight. Removing it also signals the repo's Hermes-native migration to any other agent.
+
+2. **Delete `/home/hermes/chore-app/.claude/` directory** — contains `skills/run.md`, a Claude Code skill that:
+   - References a hardcoded personal path `/home/ahzed11/Code/chore-app` (doesn't exist on this machine).
+   - Calls `make dev` which requires `docker-compose` (not available on this machine).
+   - Is a Claude Code convention (project-level skills) that Hermes doesn't use (Hermes skills live in `~/.hermes/skills/`, not the project directory).
+
+3. **Update `/home/hermes/chore-app/.gitignore`** — remove the two Claude-specific lines:
+   - Delete: `# Claude Code worktrees`
+   - Delete: `.claude/worktrees/`
+   - (No Hermes equivalent is needed — Hermes doesn't create worktrees in the project directory.)
+
+### Files to leave untouched
+
+- `docs/archive/backend-report-2026-07-15.md` and `docs/archive/frontend-report-2026-07-15.md` — these are historical review reports. They mention Claude branch names (`claude/brave-ritchie-1owy48`) in their metadata headers, but that's archival provenance — not something to edit retroactively. No user-facing reference relies on these branch names.
+
+**Acceptance criteria**:
+- [ ] `CLAUDE.md` is deleted from the repo root.
+- [ ] The entire `.claude/` directory tree is deleted.
+- [ ] `.gitignore` no longer contains any Claude-specific comments or patterns.
+- [ ] `.hermes.md` (from TASK-088) is present and Hermes can discover it.
+- [ ] `git rm` is used for the deletions so the files are tracked as removed (not just absent from the working tree).
+- [ ] The existing test suite still passes — these are doc-only changes, but verify: `uv run ruff check .` and `uv run pytest tests/` in backend, `flutter test --no-pub` in flutter_app.

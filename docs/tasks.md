@@ -8,9 +8,9 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**88 tasks complete, 1 pending.** Completed task bodies live in
+**89 tasks complete, 0 pending.** Completed task bodies live in
 `docs/archive/tasks-completed.md`; the ledger below is the authoritative
-history. New work: append tasks here as TASK-089+ following the same format
+history. New work: append tasks here as TASK-090+ following the same format
 (self-contained body, acceptance criteria, ledger row).
 
 ---
@@ -44,37 +44,7 @@ history. New work: append tasks here as TASK-089+ following the same format
 | TASK-086 | ✅ Done 2026-08-05 — Flutter grocery model, API endpoint constants, Riverpod provider — archived. |
 | TASK-087 | ✅ Done 2026-08-05 — Flutter grocery list screen, 4th bottom-nav tab, router route, widget tests — archived. |
 | TASK-088 | ✅ Done 2026-08-05 — `.hermes.md` project context file created (repo map, test commands, Hermes-specific env notes: podman DB, uv path, Flutter path) — archived. |
-| TASK-089 | ⬜ Pending — Remove Claude-specific artifacts (CLAUDE.md, .claude/, .gitignore) |
+| TASK-089 | ✅ Done 2026-08-05 — Claude-specific artifacts removed: CLAUDE.md, .claude/ dir, .gitignore Claude entries; .hermes.md is now the sole project context file — archived. |
 
 ---
 
-## TASK-089: Docs — Remove Claude-specific artifacts
-
-**Domain**: Documentation  
-**Depends on**: TASK-088 (`.hermes.md` must exist first so nothing is lost)  
-
-### Files to remove
-
-1. **Delete `/home/hermes/chore-app/CLAUDE.md`** — replaced by `.hermes.md` (higher priority in Hermes's discovery chain, created in TASK-088). Keeping both would mean Hermes loads `.hermes.md` first and never reaches `CLAUDE.md`, making the latter dead weight. Removing it also signals the repo's Hermes-native migration to any other agent.
-
-2. **Delete `/home/hermes/chore-app/.claude/` directory** — contains `skills/run.md`, a Claude Code skill that:
-   - References a hardcoded personal path `/home/ahzed11/Code/chore-app` (doesn't exist on this machine).
-   - Calls `make dev` which requires `docker-compose` (not available on this machine).
-   - Is a Claude Code convention (project-level skills) that Hermes doesn't use (Hermes skills live in `~/.hermes/skills/`, not the project directory).
-
-3. **Update `/home/hermes/chore-app/.gitignore`** — remove the two Claude-specific lines:
-   - Delete: `# Claude Code worktrees`
-   - Delete: `.claude/worktrees/`
-   - (No Hermes equivalent is needed — Hermes doesn't create worktrees in the project directory.)
-
-### Files to leave untouched
-
-- `docs/archive/backend-report-2026-07-15.md` and `docs/archive/frontend-report-2026-07-15.md` — these are historical review reports. They mention Claude branch names (`claude/brave-ritchie-1owy48`) in their metadata headers, but that's archival provenance — not something to edit retroactively. No user-facing reference relies on these branch names.
-
-**Acceptance criteria**:
-- [ ] `CLAUDE.md` is deleted from the repo root.
-- [ ] The entire `.claude/` directory tree is deleted.
-- [ ] `.gitignore` no longer contains any Claude-specific comments or patterns.
-- [ ] `.hermes.md` (from TASK-088) is present and Hermes can discover it.
-- [ ] `git rm` is used for the deletions so the files are tracked as removed (not just absent from the working tree).
-- [ ] The existing test suite still passes — these are doc-only changes, but verify: `uv run ruff check .` and `uv run pytest tests/` in backend, `flutter test --no-pub` in flutter_app.
