@@ -20,10 +20,13 @@ class GroceriesNotifier extends FamilyAsyncNotifier<List<GroceryItemModel>, Stri
   }
 
   /// Adds a new item to the grocery list.
+  ///
+  /// The backend returns the created item (201); insert it into state
+  /// directly so the list updates without a re-fetch (TASK-092).
   Future<void> addItem(String name, {String? quantity, String? notes}) async {
     final householdId = arg;
     final dio = ref.read(dioProvider);
-    await dio.post<Map<String, dynamic>>(
+    final response = await dio.post<Map<String, dynamic>>(
       ApiEndpoints.householdGroceries(householdId),
       data: {
         'name': name,
@@ -31,31 +34,41 @@ class GroceriesNotifier extends FamilyAsyncNotifier<List<GroceryItemModel>, Stri
         if (notes != null && notes.isNotEmpty) 'notes': notes,
       },
     );
-    ref.invalidateSelf();
-    await future;
+    final newItem = GroceryItemModel.fromJson(response.data!);
+    // Newest first, matching the backend's created_at DESC ordering.
+    state = state.whenData((items) => [newItem, ...items]);
   }
 
   /// Updates an existing item's name/quantity/notes.
+  ///
+  /// The backend returns the updated item; replace it in state directly so
+  /// the list reflects the change immediately (TASK-092).
   Future<void> updateItem(String itemId, Map<String, dynamic> body) async {
     final householdId = arg;
     final dio = ref.read(dioProvider);
-    await dio.patch<Map<String, dynamic>>(
+    final response = await dio.patch<Map<String, dynamic>>(
       ApiEndpoints.groceryItem(householdId, itemId),
       data: body,
     );
-    ref.invalidateSelf();
-    await future;
+    final updated = GroceryItemModel.fromJson(response.data!);
+    state = state.whenData((items) => [
+      for (final i in items) if (i.id == itemId) updated else i,
+    ]);
   }
 
   /// Deletes an item from the grocery list.
+  ///
+  /// The backend returns 204 with no body; just drop the item from state
+  /// directly so it disappears immediately (TASK-092).
   Future<void> deleteItem(String itemId) async {
     final householdId = arg;
     final dio = ref.read(dioProvider);
     await dio.delete<void>(
       ApiEndpoints.groceryItem(householdId, itemId),
     );
-    ref.invalidateSelf();
-    await future;
+    state = state.whenData(
+      (items) => items.where((i) => i.id != itemId).toList(),
+    );
   }
 
   /// Toggles an item's purchased state with an optimistic update.
