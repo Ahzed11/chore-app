@@ -74,10 +74,18 @@ jobs:
             echo "KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
-      # --build-number ties the APK's versionCode to the CI run number so
-      # successive CI-built APKs always upgrade-install over one another.
+      # --build-number ties the APK's versionCode to the version in
+      # pubspec.yaml (MAJOR*10000 + MINOR*100 + PATCH, see TASK-095) so the
+      # versionCode is deterministic, strictly increases per release, and
+      # matches what F-Droid reads from the APK manifest.
+      - name: Extract versionCode from pubspec
+        run: |
+          APP_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          VERSION_CODE=$(echo "$APP_VERSION" | cut -d+ -f2)
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
       - name: Build release APK
-        run: flutter build apk --release --build-number=$GITHUB_RUN_NUMBER
+        run: flutter build apk --release --build-number=$VERSION_CODE
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
