@@ -94,3 +94,39 @@ jobs:
           path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      # --- Release publishing (TASK-093) ----------------------------------
+      # On push to main only, publish the signed APK as a GitHub Release so
+      # the F-Droid repo (Ahzed11/chore-app-fdroid) can index it. Version
+      # must be bumped in pubspec.yaml before merging: the tag is derived
+      # from versionName and must not already exist.
+      - name: Prepare release tag
+        id: prepare_release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          APP_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          TAG="v$(echo "$APP_VERSION" | cut -d+ -f1)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
+            echo "Tag $TAG already exists, skipping release creation"
+            echo "SKIP_RELEASE=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.SKIP_RELEASE != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          body: |
+            ChoreApp ${{ env.TAG }}
+
+            Automated release built from commit `${{ github.sha }}` on `main`.
+            The F-Droid repository indexes this release automatically.
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
