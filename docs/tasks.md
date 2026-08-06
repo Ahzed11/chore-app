@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**89 tasks complete, 0 pending.** Completed task bodies live in
+**89 tasks complete, 3 pending.** Completed task bodies live in
 `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. New work: append tasks here as TASK-090+ following the same format
 (self-contained body, acceptance criteria, ledger row).
@@ -45,6 +45,123 @@ history. New work: append tasks here as TASK-090+ following the same format
 | TASK-087 | ✅ Done 2026-08-05 — Flutter grocery list screen, 4th bottom-nav tab, router route, widget tests — archived. |
 | TASK-088 | ✅ Done 2026-08-05 — `.hermes.md` project context file created (repo map, test commands, Hermes-specific env notes: podman DB, uv path, Flutter path) — archived. |
 | TASK-089 | ✅ Done 2026-08-05 — Claude-specific artifacts removed: CLAUDE.md, .claude/ dir, .gitignore Claude entries; .hermes.md is now the sole project context file — archived. |
+| TASK-090 | ⏳ Pending — GroceryListScreen theming: remove AppBar, use inline header matching ChoreListScreen pattern |
+| TASK-091 | ⏳ Pending — GroceryListScreen: remove the back-arrow button (bottom nav already handles navigation) |
+| TASK-092 | ⏳ Pending — GroceriesNotifier: fix addItem/updateItem/deleteItem to update state directly from API responses so the list refreshes immediately |
+
+---
+
+## TASK-090 — GroceryListScreen theming: match other screens' style
+
+**Domain**: Flutter frontend — groceries feature
+**Depends on**: None
+**Branch**: `fix/grocery-list-polish`
+
+The current `GroceryListScreen` uses a `Scaffold.appBar` with `AppBar(backgroundColor: Colors.white, ...)` and an inline title styled with the `_teal` color. The other screens in the app (e.g. `ChoreListScreen`) embed their header as the first child of the `Scaffold.body > SafeArea > Column`, with no `appBar` parameter at all. The title uses the `_darkText` color and the header area follows a consistent layout.
+
+**Acceptance criteria**:
+1. `GroceryListScreen` no longer passes an `appBar` to `Scaffold` — the header is rendered inline in the `body` column, matching `ChoreListScreen`'s structure.
+2. The household name text uses the `_darkText` color (`Color(0xFF0F2E2C)`) with `fontSize: 30`, `fontWeight: FontWeight.w700`, and `letterSpacing: -0.5` — exactly matching `_ChoreListHeader`.
+3. The `_teal` constant is removed from `grocery_list_screen.dart` if unused after the refactor (it's still used by the add button and checkbox, so keep it — but the `_darkText` constant must be added).
+4. The bottom `_GroceryBottomNav` widget is unchanged and still rendered via `Scaffold.bottomNavigationBar`.
+5. The widget tests in `grocery_list_screen_test.dart` pass without modification.
+6. `flutter analyze` returns zero errors.
+
+**Why AppBar is wrong here**: The other screens (chores, my-chores, leaderboard) all use inline headers. AppBar with just a title and leading button is an odd-one-out that makes the grocery screen feel like a different app.
+
+---
+
+## TASK-091 — GroceryListScreen: remove back-arrow button
+
+**Domain**: Flutter frontend — groceries feature
+**Depends on**: TASK-090 (same file, same header area)
+**Branch**: `fix/grocery-list-polish`
+
+The current screen has `leading: IconButton(icon: Icons.arrow_back_rounded, ...)` in the AppBar that navigates to `/households`. This button is redundant: the bottom `_GroceryBottomNav` already provides navigation to "All Chores" (tab 0), which is the primary view, and the user can reach `/households` via the Android back button or by switching tabs.
+
+**Acceptance criteria**:
+1. There is no back-arrow button anywhere on the `GroceryListScreen`.
+2. The bottom navigation bar still functions correctly (tab switching between All Chores, My Chores, Leaderboard, Groceries).
+3. The widget tests in `grocery_list_screen_test.dart` pass (they don't test the back button, but verify nothing breaks).
+4. `flutter analyze` returns zero errors.
+
+**Note**: When TASK-090 converts the header from `AppBar` to an inline widget, the back button is automatically removed because the `leading` property disappears. If any back-button icon or text remains visible, remove it.
+
+---
+
+## TASK-092 — GroceriesNotifier: fix list not refreshing after add/update/delete
+
+**Domain**: Flutter frontend — groceries provider
+**Depends on**: None (can be done independently, but best after TASK-090/TASK-091)
+**Branch**: `fix/grocery-list-polish`
+
+**Root cause**: The `addItem`, `updateItem`, and `deleteItem` methods in `GroceriesNotifier` call the API then use `ref.invalidateSelf() + await future` to trigger a re-fetch. The backend **does** return the created/updated item in its response:
+
+- `POST /groceries` → returns `GroceryItemResponse` (201)
+- `PATCH /groceries/{id}` → returns `GroceryItemResponse` (200)
+- `DELETE /groceries/{id}` → returns 204 (no body)
+
+But the current provider code ignores these responses. The `togglePurchased` method works correctly because it directly mutates `state` — this is the pattern to follow.
+
+**Acceptance criteria**:
+1. **`addItem`**: Parses the `GroceryItemResponse` from the POST response and appends it to `state` via `state = state.whenData((items) => [...items, GroceryItemModel.fromJson(response.data!)]);` — no `ref.invalidateSelf()` or `await future` needed.
+2. **`updateItem`**: Parses the response from the PATCH and replaces the matching item in `state` via `state.whenData(...)` — exactly like `togglePurchased` does after receiving the server response (lines 98-101).
+3. **`deleteItem`**: Removes the matching item from `state` via `state = state.whenData((items) => items.where((i) => i.id != itemId).toList());` — no `ref.invalidateSelf()` or `await future`.
+4. After adding an item, the grocery list on screen shows the new item immediately without requiring an app restart or manual refresh.
+5. After updating an item (via the edit sheet), the list reflects the changes immediately.
+6. After deleting an item, it disappears from the list immediately.
+7. All existing widget tests pass.
+8. `flutter analyze` returns zero errors.
+
+**Implementation notes**:
+
+`addItem` should become:
+```dart
+Future<void> addItem(String name, {String? quantity, String? notes}) async {
+  final householdId = arg;
+  final dio = ref.read(dioProvider);
+  final response = await dio.post<Map<String, dynamic>>(
+    ApiEndpoints.householdGroceries(householdId),
+    data: {
+      'name': name,
+      if (quantity != null && quantity.isNotEmpty) 'quantity': quantity,
+      if (notes != null && notes.isNotEmpty) 'notes': notes,
+    },
+  );
+  final newItem = GroceryItemModel.fromJson(response.data!);
+  state = state.whenData((items) => [newItem, ...items]);
+}
+```
+
+`updateItem` should become:
+```dart
+Future<void> updateItem(String itemId, Map<String, dynamic> body) async {
+  final householdId = arg;
+  final dio = ref.read(dioProvider);
+  final response = await dio.patch<Map<String, dynamic>>(
+    ApiEndpoints.groceryItem(householdId, itemId),
+    data: body,
+  );
+  final updated = GroceryItemModel.fromJson(response.data!);
+  state = state.whenData((items) => [
+    for (final i in items) if (i.id == itemId) updated else i,
+  ]);
+}
+```
+
+`deleteItem` should become:
+```dart
+Future<void> deleteItem(String itemId) async {
+  final householdId = arg;
+  final dio = ref.read(dioProvider);
+  await dio.delete<void>(
+    ApiEndpoints.groceryItem(householdId, itemId),
+  );
+  state = state.whenData((items) => items.where((i) => i.id != itemId).toList());
+}
+```
+
+**Note**: The `dio.delete<void>` call returns `void` (204), so `response.data` is not available — that's fine, we just filter the item out of the list.
 
 ---
 
