@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**89 tasks complete, 0 pending.** Completed task bodies live in
+**92 tasks complete, 0 pending.** Completed task bodies live in
 `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. New work: append tasks here as TASK-090+ following the same format
 (self-contained body, acceptance criteria, ledger row).
@@ -45,6 +45,6 @@ history. New work: append tasks here as TASK-090+ following the same format
 | TASK-087 | ✅ Done 2026-08-05 — Flutter grocery list screen, 4th bottom-nav tab, router route, widget tests — archived. |
 | TASK-088 | ✅ Done 2026-08-05 — `.hermes.md` project context file created (repo map, test commands, Hermes-specific env notes: podman DB, uv path, Flutter path) — archived. |
 | TASK-089 | ✅ Done 2026-08-05 — Claude-specific artifacts removed: CLAUDE.md, .claude/ dir, .gitignore Claude entries; .hermes.md is now the sole project context file — archived. |
+| TASK-090, TASK-091, TASK-092 | ✅ Done 2026-08-06 — grocery list polish: AppBar replaced with inline header matching other tabs (_darkText title); back-arrow button removed (regression test added); GroceriesNotifier add/update/delete now update state directly from API responses so the list refreshes immediately — archived. |
 
 ---
-

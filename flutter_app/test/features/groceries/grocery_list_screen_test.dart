@@ -213,5 +213,19 @@ void main() {
       expect(find.text('Leaderboard'), findsOneWidget);
       expect(find.text('Groceries'), findsOneWidget);
     });
+
+    testWidgets('has no back-arrow button and no AppBar (TASK-091)',
+        (tester) async {
+      await tester.pumpWidget(
+        _buildScreen(groceriesNotifier: _EmptyGroceriesNotifier.new),
+      );
+      await tester.pump();
+
+      // The screen is a bottom-nav tab; navigation happens via the bottom
+      // bar and the system back button. A visible back arrow that jumps to
+      // the household picker makes no sense here.
+      expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
+      expect(find.byType(AppBar), findsNothing);
+    });
   });
 }

@@ -16,6 +16,7 @@ import '../providers/groceries_provider.dart';
 // ---------------------------------------------------------------------------
 
 const _teal = Color(0xFF0D9488);
+const _darkText = Color(0xFF0F2E2C);
 const _secondaryText = Color(0xFF7F9794);
 const _borderLight = Color(0xFFE6EDEC);
 const _green = Color(0xFF4CAF50);
@@ -129,27 +130,14 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
       },
       child: Scaffold(
         backgroundColor: Colors.white,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          title: Text(
-            householdName ?? 'Groceries',
-            style: const TextStyle(
-              color: _teal,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_rounded, color: _teal),
-            tooltip: 'Back to households',
-            onPressed: () => context.go('/households'),
-          ),
-        ),
         body: SafeArea(
           bottom: false,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Header — inline, matching the other tab screens (no AppBar).
+              _GroceryListHeader(name: householdName ?? 'Groceries'),
+
               // Add-item row
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -266,6 +254,39 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
           householdId: widget.householdId,
           currentIndex: 3,
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Header — inline, matching _ChoreListHeader on the chores tab (TASK-090)
+// ---------------------------------------------------------------------------
+
+class _GroceryListHeader extends StatelessWidget {
+  const _GroceryListHeader({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            name,
+            style: const TextStyle(
+              fontSize: 30,
+              fontWeight: FontWeight.w700,
+              color: _darkText,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 18),
+        ],
       ),
     );
   }
