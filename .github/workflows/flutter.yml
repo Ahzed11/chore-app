@@ -22,6 +22,12 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
 
+    # Needed to publish the release (TASK-093): the repo default is
+    # read-only workflow permissions, so GITHUB_TOKEN must be granted
+    # contents: write explicitly for the Create GitHub Release step.
+    permissions:
+      contents: write
+
     # The secrets context is not allowed in step-level `if:`; evaluate the
     # presence check here (where it is allowed) and gate the signing step
     # on the resulting env var instead.
