@@ -114,7 +114,9 @@ jobs:
           TAG="v$(echo "$APP_VERSION" | cut -d+ -f1)"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
+          # Exact tag match (anchor the line): ls-remote prints
+          # "<sha>\trefs/tags/<tag>" and may add "^{}" for annotated tags.
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -qE "refs/tags/$TAG(\^\{\})?$"; then
             echo "Tag $TAG already exists, skipping release creation"
             echo "SKIP_RELEASE=true" >> "$GITHUB_ENV"
           fi
