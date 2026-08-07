@@ -3289,3 +3289,70 @@ The existing CI infrastructure (Flutter build + release signing via `ANDROID_KEY
 **Alternative considered but rejected**: `fdroid nightly` with the `wardvl/f-droid-nightly-action` GitHub Action. This requires managing a DEBUG_KEYSTORE secret and SSH deploy keys, and produces a nightly channel (every push) rather than stable releases. The xarantolus approach gives stable, versioned releases which is a better fit for a household app where every update should be deliberate.
 
 ---
+
+## TASK-097: Flutter — Extract reusable bottom navigation bar with consistent icons
+
+**Domain**: Flutter frontend — shared widgets / tab navigation
+**Depends on**: None
+**Branch**: `fix/consistent-bottom-nav`
+
+The four household tab screens each define their own private copy of the bottom
+navigation bar — `_ChoreListBottomNav`, `_MyChoresBottomNav`,
+`_LeaderboardBottomNav`, `_GroceryBottomNav` — and the copies have drifted
+apart:
+
+- "All Chores" icon: `Icons.format_list_bulleted_rounded` on the chores tab,
+  `Icons.checklist_rounded` on the other three.
+- "Leaderboard" icon: `Icons.emoji_events_rounded` (trophy) on the chores tab,
+  `Icons.leaderboard_rounded` (bar chart) on the other three.
+
+Extract a single shared widget that is the one source of truth for the bar's
+icons, labels, order, and navigation, and standardize on the trophy for the
+Leaderboard destination.
+
+**Acceptance criteria**:
+1. A new shared widget `AppBottomNavBar` exists under
+   `lib/shared/widgets/` (e.g. `app_bottom_nav_bar.dart`). It takes
+   `householdId` and `currentIndex`, renders a `BottomNavigationBar` with the
+   four destinations in order All Chores / My Chores / Leaderboard / Groceries,
+   and navigates via `context.goNamed(...)` with the household id path param.
+2. The `Key('bottom_nav_bar')` is preserved on the shared bar so existing
+   widget tests keep passing.
+3. Icons are identical on every tab: All Chores = `Icons.checklist_rounded`,
+   My Chores = `Icons.person_rounded`, Leaderboard = `Icons.emoji_events_rounded`
+   (trophy), Groceries = `Icons.shopping_cart_rounded`.
+4. Tapping the current tab is a no-op; tapping any other tab navigates.
+5. The four private nav widgets are deleted and each screen renders
+   `AppBottomNavBar` with its own `currentIndex` (chores 0, my-chores 1,
+   leaderboard 2, groceries 3).
+6. `flutter analyze` returns zero errors and the full `flutter test` suite
+   passes.
+
+---
+
+## TASK-098: Flutter — GroceryListScreen header title shows "Groceries", not the household name
+
+**Domain**: Flutter frontend — groceries feature
+**Depends on**: None (independent of TASK-097; same branch)
+**Branch**: `fix/consistent-bottom-nav`
+
+`GroceryListScreen` renders its inline header with
+`_GroceryListHeader(name: householdName ?? 'Groceries')`, where `householdName`
+is looked up from `householdsNotifierProvider`. Once that provider resolves,
+the screen title becomes the household's name (e.g. "Casa Zenon") instead of a
+feature title. Every other tab screen uses a static feature title — "My
+Chores", "Leaderboard" — so the groceries tab should show "Groceries".
+
+**Acceptance criteria**:
+1. The header title on `GroceryListScreen` is always the static string
+   "Groceries" (same styling as the other tab headers: `fontSize: 30`,
+   `FontWeight.w700`, `_darkText`), regardless of the loaded household's name.
+2. The `householdsNotifierProvider` watch and the `householdName` local are
+   removed from the screen if nothing else uses them.
+3. Existing widget tests in `grocery_list_screen_test.dart` pass without
+   modification (the "bottom nav with Groceries selected" test already
+   asserts exactly one "Groceries" text — the header).
+4. `flutter analyze` returns zero errors and the full `flutter test` suite
+   passes.
+
+---
