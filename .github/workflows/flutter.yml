@@ -134,9 +134,12 @@ jobs:
             exit 1
           fi
 
-          ACTUAL_SHA256=$("$APKSIGNER" verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
-            | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          APKSIGNER_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK" 2>&1 || true)
+          # Keep the raw output visible so a future format change is diagnosable.
+          echo "$APKSIGNER_OUTPUT" | sed 's/^/  apksigner: /'
+          ACTUAL_SHA256=$(echo "$APKSIGNER_OUTPUT" \
+            | grep -iEo 'SHA-?256 digest: *[0-9a-fA-F]{64}' | head -1 \
+            | sed -E 's/.*: *([0-9a-fA-F]{64})/\1/' | tr '[:upper:]' '[:lower:]')
           EXPECTED=$(echo "$EXPECTED_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
 
           if [ -z "$ACTUAL_SHA256" ]; then
