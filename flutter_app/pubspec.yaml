@@ -5,7 +5,7 @@ publish_to: 'none'
 # version: MAJOR.MINOR.PATCH+CODE  where CODE = MAJOR*10000 + MINOR*100 + PATCH
 # (CODE is the Android versionCode — must strictly increase per release for
 # F-Droid to treat a new APK as an update; see TASK-095.)
-version: 1.0.0+10000
+version: 1.0.1+10001
 
 environment:
   sdk: ^3.12.2
