@@ -8,9 +8,9 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**92 tasks complete, 0 pending.** Completed task bodies live in
-`docs/archive/tasks-completed.md`; the ledger below is the authoritative
-history. New work: append tasks here as TASK-090+ following the same format
+**96 tasks complete, 2 pending (TASK-097, TASK-098).** Completed task bodies
+live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
+history. New work: append tasks here as TASK-097+ following the same format
 (self-contained body, acceptance criteria, ledger row).
 
 ---
@@ -47,5 +47,72 @@ history. New work: append tasks here as TASK-090+ following the same format
 | TASK-089 | ✅ Done 2026-08-05 — Claude-specific artifacts removed: CLAUDE.md, .claude/ dir, .gitignore Claude entries; .hermes.md is now the sole project context file — archived. |
 || TASK-090, TASK-091, TASK-092 | ✅ Done 2026-08-06 — grocery list polish: AppBar replaced with inline header matching other tabs (_darkText title); back-arrow button removed (regression test added); GroceriesNotifier add/update/delete now update state directly from API responses so the list refreshes immediately — archived. |
 || TASK-093, TASK-094, TASK-095, TASK-096 | ✅ Done 2026-08-07 — F-Droid auto-publishing pipeline: signed release APK published as a GitHub Release on main pushes (tag derived from pubspec versionName, duplicate-tag guard); chore-app-fdroid repo created from the xarantolus/fdroid template with apps.yaml + keystore/config stored as repo secrets; deterministic versionCode (MAJOR*10000+MINOR*100+PATCH) in pubspec + CI; README F-Droid install docs with repo URL + fingerprint — archived. |
+
+---
+
+## TASK-097: Flutter — Extract reusable bottom navigation bar with consistent icons
+
+**Domain**: Flutter frontend — shared widgets / tab navigation
+**Depends on**: None
+**Branch**: `fix/consistent-bottom-nav`
+
+The four household tab screens each define their own private copy of the bottom
+navigation bar — `_ChoreListBottomNav`, `_MyChoresBottomNav`,
+`_LeaderboardBottomNav`, `_GroceryBottomNav` — and the copies have drifted
+apart:
+
+- "All Chores" icon: `Icons.format_list_bulleted_rounded` on the chores tab,
+  `Icons.checklist_rounded` on the other three.
+- "Leaderboard" icon: `Icons.emoji_events_rounded` (trophy) on the chores tab,
+  `Icons.leaderboard_rounded` (bar chart) on the other three.
+
+Extract a single shared widget that is the one source of truth for the bar's
+icons, labels, order, and navigation, and standardize on the trophy for the
+Leaderboard destination.
+
+**Acceptance criteria**:
+1. A new shared widget `AppBottomNavBar` exists under
+   `lib/shared/widgets/` (e.g. `app_bottom_nav_bar.dart`). It takes
+   `householdId` and `currentIndex`, renders a `BottomNavigationBar` with the
+   four destinations in order All Chores / My Chores / Leaderboard / Groceries,
+   and navigates via `context.goNamed(...)` with the household id path param.
+2. The `Key('bottom_nav_bar')` is preserved on the shared bar so existing
+   widget tests keep passing.
+3. Icons are identical on every tab: All Chores = `Icons.checklist_rounded`,
+   My Chores = `Icons.person_rounded`, Leaderboard = `Icons.emoji_events_rounded`
+   (trophy), Groceries = `Icons.shopping_cart_rounded`.
+4. Tapping the current tab is a no-op; tapping any other tab navigates.
+5. The four private nav widgets are deleted and each screen renders
+   `AppBottomNavBar` with its own `currentIndex` (chores 0, my-chores 1,
+   leaderboard 2, groceries 3).
+6. `flutter analyze` returns zero errors and the full `flutter test` suite
+   passes.
+
+---
+
+## TASK-098: Flutter — GroceryListScreen header title shows "Groceries", not the household name
+
+**Domain**: Flutter frontend — groceries feature
+**Depends on**: None (independent of TASK-097; same branch)
+**Branch**: `fix/consistent-bottom-nav`
+
+`GroceryListScreen` renders its inline header with
+`_GroceryListHeader(name: householdName ?? 'Groceries')`, where `householdName`
+is looked up from `householdsNotifierProvider`. Once that provider resolves,
+the screen title becomes the household's name (e.g. "Casa Zenon") instead of a
+feature title. Every other tab screen uses a static feature title — "My
+Chores", "Leaderboard" — so the groceries tab should show "Groceries".
+
+**Acceptance criteria**:
+1. The header title on `GroceryListScreen` is always the static string
+   "Groceries" (same styling as the other tab headers: `fontSize: 30`,
+   `FontWeight.w700`, `_darkText`), regardless of the loaded household's name.
+2. The `householdsNotifierProvider` watch and the `householdName` local are
+   removed from the screen if nothing else uses them.
+3. Existing widget tests in `grocery_list_screen_test.dart` pass without
+   modification (the "bottom nav with Groceries selected" test already
+   asserts exactly one "Groceries" text — the header).
+4. `flutter analyze` returns zero errors and the full `flutter test` suite
+   passes.
 
 ---
