@@ -22,6 +22,12 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
 
+    # Needed to publish the release (TASK-093): the repo default is
+    # read-only workflow permissions, so GITHUB_TOKEN must be granted
+    # contents: write explicitly for the Create GitHub Release step.
+    permissions:
+      contents: write
+
     # The secrets context is not allowed in step-level `if:`; evaluate the
     # presence check here (where it is allowed) and gate the signing step
     # on the resulting env var instead.
@@ -74,10 +80,18 @@ jobs:
             echo "KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
-      # --build-number ties the APK's versionCode to the CI run number so
-      # successive CI-built APKs always upgrade-install over one another.
+      # --build-number ties the APK's versionCode to the version in
+      # pubspec.yaml (MAJOR*10000 + MINOR*100 + PATCH, see TASK-095) so the
+      # versionCode is deterministic, strictly increases per release, and
+      # matches what F-Droid reads from the APK manifest.
+      - name: Extract versionCode from pubspec
+        run: |
+          APP_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          VERSION_CODE=$(echo "$APP_VERSION" | cut -d+ -f2)
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
       - name: Build release APK
-        run: flutter build apk --release --build-number=$GITHUB_RUN_NUMBER
+        run: flutter build apk --release --build-number=$VERSION_CODE
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -86,3 +100,41 @@ jobs:
           path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      # --- Release publishing (TASK-093) ----------------------------------
+      # On push to main only, publish the signed APK as a GitHub Release so
+      # the F-Droid repo (Ahzed11/chore-app-fdroid) can index it. Version
+      # must be bumped in pubspec.yaml before merging: the tag is derived
+      # from versionName and must not already exist.
+      - name: Prepare release tag
+        id: prepare_release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          APP_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          TAG="v$(echo "$APP_VERSION" | cut -d+ -f1)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+          # Exact tag match (anchor the line): ls-remote prints
+          # "<sha>\trefs/tags/<tag>" and may add "^{}" for annotated tags.
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -qE "refs/tags/$TAG(\^\{\})?$"; then
+            echo "Tag $TAG already exists, skipping release creation"
+            echo "SKIP_RELEASE=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.SKIP_RELEASE != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          body: |
+            ChoreApp ${{ env.TAG }}
+
+            Automated release built from commit `${{ github.sha }}` on `main`.
+            The F-Droid repository indexes this release automatically.
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,8 +17,10 @@ household invites — no third-party account or cloud service required.
 
 CI (`.github/workflows/ci.yml`) publishes a backend image to
 `ghcr.io/ahzed11/chore-app-api` on every push to `main`, and
-(`.github/workflows/flutter.yml`) builds and uploads a release APK as a
-workflow artifact.
+(`.github/workflows/flutter.yml`) builds a release APK and publishes it as a
+GitHub Release, which the self-hosted F-Droid repository
+([chore-app-fdroid](https://github.com/Ahzed11/chore-app-fdroid)) indexes
+automatically.
 
 ## Production quick start
 
@@ -74,12 +76,31 @@ compose YAML.
 
 ## Getting the app onto your phone
 
-The Flutter workflow builds a release APK on every push and uploads it as a
-build artifact (not a GitHub Release):
+The Flutter workflow builds a signed release APK on every push to `main` and
+publishes it as a GitHub Release. The release is picked up automatically by
+the project's self-hosted F-Droid repository, so updates arrive through your
+F-Droid client — no manual APK downloads.
 
-1. Go to the repo's **Actions** tab → the latest successful **Flutter**
-   workflow run on `main` → download the `chore-app-<sha>` artifact and
-   unzip it to get `app-release.apk`.
+### Recommended: install via the F-Droid repository
+
+1. Install the [F-Droid client](https://f-droid.org/) on your Android device.
+2. Add the ChoreApp repository (Settings → Repositories → `+`), either by
+   scanning the QR code in the
+   [chore-app-fdroid repo](https://github.com/Ahzed11/chore-app-fdroid) or by
+   entering the URL directly:
+
+   ```
+   https://raw.githubusercontent.com/Ahzed11/chore-app-fdroid/main/fdroid/repo?fingerprint=52FB3A307BA6BA31BE81CB6A5FC50B13961397DC386C645EB381D3CBED0E4E5A
+   ```
+
+3. Install **ChoreApp** from the repository. From then on, every release
+   (each merge to `main` with a bumped `version` in `flutter_app/pubspec.yaml`)
+   appears as an update in F-Droid automatically.
+
+### Alternative: grab the APK from a GitHub Release
+
+1. Go to the repo's **Releases** page → the latest `v*` release → download the
+   attached `app-release.apk`.
 2. Install it on an Android device (you'll need to allow installs from
    unknown sources, since it isn't distributed through the Play Store).
 
