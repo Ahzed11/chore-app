@@ -7,7 +7,6 @@ import '../../../shared/widgets/accessible_tap.dart';
 import '../../../shared/widgets/app_bottom_nav_bar.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
-import '../../household/providers/household_provider.dart';
 import '../models/grocery_item_model.dart';
 import '../providers/groceries_provider.dart';
 
@@ -116,12 +115,6 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
   Widget build(BuildContext context) {
     final groceriesAsync =
         ref.watch(groceriesNotifierProvider(widget.householdId));
-    final householdName = ref
-        .watch(householdsNotifierProvider)
-        .whenOrNull(data: (h) => h
-            .where((h) => h.id == widget.householdId)
-            .map((h) => h.name)
-            .firstOrNull);
 
     return PopScope(
       canPop: false,
@@ -136,7 +129,7 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Header — inline, matching the other tab screens (no AppBar).
-              _GroceryListHeader(name: householdName ?? 'Groceries'),
+              const _GroceryListHeader(),
 
               // Add-item row
               Padding(
@@ -264,28 +257,26 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
 // ---------------------------------------------------------------------------
 
 class _GroceryListHeader extends StatelessWidget {
-  const _GroceryListHeader({required this.name});
-
-  final String name;
+  const _GroceryListHeader();
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            name,
-            style: const TextStyle(
+            'Groceries',
+            style: TextStyle(
               fontSize: 30,
               fontWeight: FontWeight.w700,
               color: _darkText,
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: 18),
         ],
       ),
     );
