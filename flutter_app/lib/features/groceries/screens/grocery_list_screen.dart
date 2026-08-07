@@ -3,11 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/api/friendly_error.dart';
-import '../../../router/app_router.dart';
 import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/app_bottom_nav_bar.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
-import '../../household/providers/household_provider.dart';
 import '../models/grocery_item_model.dart';
 import '../providers/groceries_provider.dart';
 
@@ -116,12 +115,6 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
   Widget build(BuildContext context) {
     final groceriesAsync =
         ref.watch(groceriesNotifierProvider(widget.householdId));
-    final householdName = ref
-        .watch(householdsNotifierProvider)
-        .whenOrNull(data: (h) => h
-            .where((h) => h.id == widget.householdId)
-            .map((h) => h.name)
-            .firstOrNull);
 
     return PopScope(
       canPop: false,
@@ -136,7 +129,7 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Header — inline, matching the other tab screens (no AppBar).
-              _GroceryListHeader(name: householdName ?? 'Groceries'),
+              const _GroceryListHeader(),
 
               // Add-item row
               Padding(
@@ -250,7 +243,7 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
             ],
           ),
         ),
-        bottomNavigationBar: _GroceryBottomNav(
+        bottomNavigationBar: AppBottomNavBar(
           householdId: widget.householdId,
           currentIndex: 3,
         ),
@@ -264,28 +257,26 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
 // ---------------------------------------------------------------------------
 
 class _GroceryListHeader extends StatelessWidget {
-  const _GroceryListHeader({required this.name});
-
-  final String name;
+  const _GroceryListHeader();
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            name,
-            style: const TextStyle(
+            'Groceries',
+            style: TextStyle(
               fontSize: 30,
               fontWeight: FontWeight.w700,
               color: _darkText,
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: 18),
         ],
       ),
     );
@@ -589,67 +580,6 @@ class _EditItemSheetState extends State<_EditItemSheet> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Bottom navigation (Groceries = index 3)
-// ---------------------------------------------------------------------------
-
-class _GroceryBottomNav extends StatelessWidget {
-  const _GroceryBottomNav({
-    required this.householdId,
-    required this.currentIndex,
-  });
-
-  final String householdId;
-  final int currentIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    return BottomNavigationBar(
-      key: const Key('bottom_nav_bar'),
-      currentIndex: currentIndex,
-      onTap: (index) {
-        switch (index) {
-          case 0:
-            context.goNamed(
-              AppRoutes.choreList,
-              pathParameters: {'householdId': householdId},
-            );
-          case 1:
-            context.goNamed(
-              AppRoutes.myChores,
-              pathParameters: {'householdId': householdId},
-            );
-          case 2:
-            context.goNamed(
-              AppRoutes.leaderboard,
-              pathParameters: {'householdId': householdId},
-            );
-          case 3:
-            break; // Already on Groceries.
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.checklist_rounded),
-          label: 'All Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person_rounded),
-          label: 'My Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.leaderboard_rounded),
-          label: 'Leaderboard',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.shopping_cart_rounded),
-          label: 'Groceries',
-        ),
-      ],
     );
   }
 }

@@ -211,7 +211,24 @@ void main() {
       expect(find.text('All Chores'), findsOneWidget);
       expect(find.text('My Chores'), findsOneWidget);
       expect(find.text('Leaderboard'), findsOneWidget);
-      expect(find.text('Groceries'), findsOneWidget);
+      // "Groceries" appears twice: the nav destination label and the screen
+      // header title (TASK-098 made the header a static feature title).
+      expect(find.text('Groceries'), findsNWidgets(2));
+    });
+
+    testWidgets(
+        'header title is "Groceries", not the household name (TASK-098)',
+        (tester) async {
+      await tester.pumpWidget(
+        _buildScreen(groceriesNotifier: _EmptyGroceriesNotifier.new),
+      );
+      await tester.pump();
+
+      // Regression: the header used to resolve the household name and show
+      // it as the screen title (e.g. "Test Household") once the household
+      // provider loaded. It must always be the static feature title.
+      expect(find.text('Groceries'), findsNWidgets(2));
+      expect(find.text('Test Household'), findsNothing);
     });
 
     testWidgets('has no back-arrow button and no AppBar (TASK-091)',
