@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import '../../../core/api/friendly_error.dart';
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/app_bottom_nav_bar.dart';
 import '../../../shared/widgets/avatar_colors.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
@@ -298,8 +299,9 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                 child: const Icon(Icons.add_rounded),
               )
             : null,
-        bottomNavigationBar: _ChoreListBottomNav(
+        bottomNavigationBar: AppBottomNavBar(
           householdId: widget.householdId,
+          currentIndex: 0,
         ),
       ),
     );
@@ -586,60 +588,6 @@ class _ChoreFilterTabs extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Bottom navigation bar
-// ---------------------------------------------------------------------------
-
-class _ChoreListBottomNav extends StatelessWidget {
-  const _ChoreListBottomNav({required this.householdId});
-
-  final String householdId;
-
-  @override
-  Widget build(BuildContext context) {
-    return BottomNavigationBar(
-      key: const Key('bottom_nav_bar'),
-      currentIndex: 0,
-      onTap: (index) {
-        switch (index) {
-          case 1:
-            context.goNamed(
-              AppRoutes.myChores,
-              pathParameters: {'householdId': householdId},
-            );
-          case 2:
-            context.goNamed(
-              AppRoutes.leaderboard,
-              pathParameters: {'householdId': householdId},
-            );
-          case 3:
-            context.goNamed(
-              AppRoutes.groceryList,
-              pathParameters: {'householdId': householdId},
-            );
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.format_list_bulleted_rounded),
-          label: 'All Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person_rounded),
-          label: 'My Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.emoji_events_rounded),
-          label: 'Leaderboard',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.shopping_cart_rounded),
-          label: 'Groceries',
-        ),
-      ],
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Empty state
 // ---------------------------------------------------------------------------

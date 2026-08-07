@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/api/friendly_error.dart';
-import '../../../router/app_router.dart';
 import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/app_bottom_nav_bar.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
 import '../../household/providers/household_provider.dart';
@@ -250,7 +250,7 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
             ],
           ),
         ),
-        bottomNavigationBar: _GroceryBottomNav(
+        bottomNavigationBar: AppBottomNavBar(
           householdId: widget.householdId,
           currentIndex: 3,
         ),
@@ -589,67 +589,6 @@ class _EditItemSheetState extends State<_EditItemSheet> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Bottom navigation (Groceries = index 3)
-// ---------------------------------------------------------------------------
-
-class _GroceryBottomNav extends StatelessWidget {
-  const _GroceryBottomNav({
-    required this.householdId,
-    required this.currentIndex,
-  });
-
-  final String householdId;
-  final int currentIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    return BottomNavigationBar(
-      key: const Key('bottom_nav_bar'),
-      currentIndex: currentIndex,
-      onTap: (index) {
-        switch (index) {
-          case 0:
-            context.goNamed(
-              AppRoutes.choreList,
-              pathParameters: {'householdId': householdId},
-            );
-          case 1:
-            context.goNamed(
-              AppRoutes.myChores,
-              pathParameters: {'householdId': householdId},
-            );
-          case 2:
-            context.goNamed(
-              AppRoutes.leaderboard,
-              pathParameters: {'householdId': householdId},
-            );
-          case 3:
-            break; // Already on Groceries.
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.checklist_rounded),
-          label: 'All Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person_rounded),
-          label: 'My Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.leaderboard_rounded),
-          label: 'Leaderboard',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.shopping_cart_rounded),
-          label: 'Groceries',
-        ),
-      ],
     );
   }
 }

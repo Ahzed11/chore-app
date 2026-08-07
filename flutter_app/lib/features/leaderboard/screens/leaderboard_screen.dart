@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/accessible_tap.dart';
+import '../../../shared/widgets/app_bottom_nav_bar.dart';
 import '../../../shared/widgets/avatar_colors.dart';
 import '../../../shared/widgets/error_widget.dart';
 import '../../../shared/widgets/loading_widget.dart';
@@ -129,7 +130,7 @@ class LeaderboardScreen extends ConsumerWidget {
             ],
           ),
         ),
-        bottomNavigationBar: _LeaderboardBottomNav(
+        bottomNavigationBar: AppBottomNavBar(
           householdId: householdId,
           currentIndex: 2,
         ),
@@ -1060,67 +1061,6 @@ class _Avatar extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Bottom navigation bar
-// ---------------------------------------------------------------------------
-
-class _LeaderboardBottomNav extends StatelessWidget {
-  const _LeaderboardBottomNav({
-    required this.householdId,
-    required this.currentIndex,
-  });
-
-  final String householdId;
-  final int currentIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    return BottomNavigationBar(
-      key: const Key('bottom_nav_bar'),
-      currentIndex: currentIndex,
-      onTap: (index) {
-        switch (index) {
-          case 0:
-            context.goNamed(
-              AppRoutes.choreList,
-              pathParameters: {'householdId': householdId},
-            );
-          case 1:
-            context.goNamed(
-              AppRoutes.myChores,
-              pathParameters: {'householdId': householdId},
-            );
-          case 2:
-            break; // Already on leaderboard.
-          case 3:
-            context.goNamed(
-              AppRoutes.groceryList,
-              pathParameters: {'householdId': householdId},
-            );
-        }
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.checklist_rounded),
-          label: 'All Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.person_rounded),
-          label: 'My Chores',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.leaderboard_rounded),
-          label: 'Leaderboard',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.shopping_cart_rounded),
-          label: 'Groceries',
-        ),
-      ],
     );
   }
 }
