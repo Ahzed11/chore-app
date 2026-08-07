@@ -8,8 +8,8 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**98 tasks complete, 0 pending.** Completed task bodies live in
-`docs/archive/tasks-completed.md`; the ledger below is the authoritative
+**98 tasks complete, 2 pending (TASK-099, TASK-100).** Completed task bodies
+live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. New work: append tasks here as TASK-099+ following the same format
 (self-contained body, acceptance criteria, ledger row).
 
@@ -49,5 +49,81 @@ history. New work: append tasks here as TASK-099+ following the same format
 || TASK-093, TASK-094, TASK-095, TASK-096 | ✅ Done 2026-08-07 — F-Droid auto-publishing pipeline: signed release APK published as a GitHub Release on main pushes (tag derived from pubspec versionName, duplicate-tag guard); chore-app-fdroid repo created from the xarantolus/fdroid template with apps.yaml + keystore/config stored as repo secrets; deterministic versionCode (MAJOR*10000+MINOR*100+PATCH) in pubspec + CI; README F-Droid install docs with repo URL + fingerprint — archived. |
 | TASK-097 | ✅ Done 2026-08-07 — shared `AppBottomNavBar` widget replaces the four per-screen bottom-nav copies (single source of truth for icons/labels/order/navigation, `Key('bottom_nav_bar')` preserved); Leaderboard destination uses the trophy icon (`emoji_events_rounded`) on every tab; All Chores standardized on `checklist_rounded`; current-tab tap is a no-op — archived. |
 | TASK-098 | ✅ Done 2026-08-07 — grocery screen header title is now the static "Groceries" instead of the household name; dead `householdsNotifierProvider` watch + import removed; regression test added (header shows "Groceries", household name absent); 217/217 tests pass, analyzer clean — archived. |
+
+---
+
+## TASK-099: CI — pin the release APK signing certificate (fail closed on any drift)
+
+**Domain**: CI / release pipeline (chore-app)
+**Depends on**: TASK-093..096 (release publishing), TASK-063 (keystore signing)
+**Branch**: `fix/pin-apk-signing-cert`
+
+**Background — the v1.0.0 incident**: the v1.0.0 release APK was built while the
+`ANDROID_KEYSTORE_*` secrets were unset, so CI silently fell back to the Flutter
+**debug keystore**. Android refuses to install an "update" whose signing key
+differs from the installed app's, so that debug-signed release can never be
+updated by any user — F-Droid simply never offers it. Nothing in the pipeline
+detected this. The fix must make this failure mode *impossible*, not merely
+unlikely.
+
+**Acceptance criteria**:
+1. A new `Verify APK signing certificate` step runs after `Build release APK`
+   (before artifact upload) whenever the keystore secrets are configured
+   (`env.HAS_ANDROID_KEYSTORE == 'true'`). It locates `apksigner` in the
+   Android build-tools, extracts `Signer #1 certificate SHA-256 digest` from
+   the built APK, and compares it (case-insensitive, whitespace-trimmed)
+   against the `ANDROID_APK_CERT_SHA256` repository secret.
+2. If `ANDROID_APK_CERT_SHA256` is unset while a keystore is configured, the
+   step **fails** with instructions for obtaining and setting the fingerprint
+   (no unverifiable release may ever be produced).
+3. On mismatch, the step **fails** printing expected vs actual digest plus an
+   explanation that installed users cannot update across signing keys and that
+   the keystore must never change silently.
+4. Releases are fail-closed: `Create GitHub Release` additionally requires
+   `env.HAS_ANDROID_KEYSTORE == 'true'`, and a dedicated
+   `Ensure release signing is configured` step **fails the workflow on main**
+   when the keystore is not configured — a debug-signed release can never be
+   published again. (Branch builds without secrets still work for forks.)
+5. The workflow header comment is updated: releases now *require* the keystore;
+   the debug fallback only applies to non-release builds.
+6. The step logic is validated locally before merge: with a stub `apksigner`
+   printing a known digest, the script passes on match and exits 1 on mismatch
+   and on empty `ANDROID_APK_CERT_SHA256`.
+7. After merge, the main CI run is green and the verify step reports the pinned
+   digest `6113f55dd8dce6c27ddca5ec033aea123819820bd13833f20f4c45ae14cb7606`
+   (the current real keystore, taken from the v1.0.1 APK itself).
+
+---
+
+## TASK-100: F-Droid repo — signature-consistency guard + purge the debug-signed v1.0.0
+
+**Domain**: CI / release pipeline (chore-app-fdroid repo)
+**Depends on**: TASK-099 (same incident), TASK-093..096
+**Branch**: `fix/signature-consistency` (in Ahzed11/chore-app-fdroid)
+
+**Background**: the F-Droid repo index currently contains two versions of
+`dev.ahzed11.choreapp` signed with *different* keys (1.0.0 = debug key, 1.0.1 =
+real key). The index-building pipeline (`update.sh` via metascoop) did not
+reject the drift. Two things are needed: (a) purge the stale debug-signed
+1.0.0 so the index only offers real-key versions, and (b) a guard that fails
+the index rebuild if a new version's signer ever differs from the newest
+version already in the index — a second line of defense behind TASK-099.
+
+**Acceptance criteria**:
+1. `update.sh` in the fdroid repo runs a consistency check after metascoop
+   succeeds and **before** `git add/commit/push`: for every package in
+   `fdroid/repo/index-v1.json`, every version's `signer` must equal the signer
+   of the highest-versionCode version of that package. Any drift → exit
+   nonzero with the offending package(s) and signers listed; the bad index is
+   never pushed.
+2. The debug-signed `chore-app_v1.0.0.apk` is deleted from `fdroid/repo/` and
+   the index is regenerated (with the repo keystore) so `index-v1.json` lists
+   only `1.0.1` / versionCode `10001` for `dev.ahzed11.choreapp`.
+3. The check is validated locally: it fails against a crafted index containing
+   the old two-signer state, and passes against the regenerated index.
+4. A dispatched workflow run on the fdroid repo succeeds end-to-end, and the
+   live `index-v1.json` shows exactly one signer for the package.
+5. The drift-detection message is actionable: it names the package, both
+   signers, and says the keystore must not change silently (see TASK-099).
 
 ---
