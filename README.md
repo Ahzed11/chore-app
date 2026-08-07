@@ -97,6 +97,15 @@ F-Droid client — no manual APK downloads.
    (each merge to `main` with a bumped `version` in `flutter_app/pubspec.yaml`)
    appears as an update in F-Droid automatically.
 
+> **Signing note (TASK-099/100)**: releases are signed with a permanent,
+> pinned keystore. CI verifies the APK's signing certificate against the
+> `ANDROID_APK_CERT_SHA256` secret and **fails the build on any drift**, and
+> the F-Droid repo refuses to index a version whose signing key changed. The
+> keystore must never change silently — a signature change means every
+> installed user has to uninstall/reinstall. If you ever *deliberately* rotate
+> it, plan that migration and update the pin (and delete the old releases: the
+> F-Droid repo indexes *all* GitHub releases).
+
 ### Alternative: grab the APK from a GitHub Release
 
 1. Go to the repo's **Releases** page → the latest `v*` release → download the
