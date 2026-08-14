@@ -269,7 +269,7 @@ async def get_chore_instance(
 # POST /households/{household_id}/chores/{instance_id}/complete  — assignee only
 # ---------------------------------------------------------------------------
 
-_TERMINAL_STATUSES = {"complete", "cancelled"}
+_TERMINAL_STATUSES = {"complete", "cancelled", "dismissed"}
 
 
 @router.post(

@@ -16,7 +16,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 
-ChoreStatusEnum = Enum("pending", "complete", "overdue", "cancelled", name="chore_status")
+ChoreStatusEnum = Enum(
+    "pending", "complete", "overdue", "cancelled", "dismissed", name="chore_status"
+)
 
 
 class ChoreInstance(Base, TimestampMixin):
