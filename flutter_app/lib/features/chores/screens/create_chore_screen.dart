@@ -172,6 +172,52 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Copy from existing task (TASK-108)
+  // ---------------------------------------------------------------------------
+
+  /// Opens the "copy from existing task" picker; on selection, copies exactly
+  /// title/description/category/effort_level ("score") into the form. The due
+  /// date, chore type, recurrence and assignee stay untouched.
+  Future<void> _pickTemplateToCopy() async {
+    // Await the provider's future: nothing watches it (the button only reads),
+    // so the first tap may trigger the build — valueOrNull would be null.
+    final List<ChoreTemplate> templates;
+    try {
+      templates =
+          await ref.read(choreTemplatesProvider(widget.householdId).future);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    if (templates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No existing tasks to copy yet.')),
+      );
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<ChoreTemplate>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _CopyTaskSheet(templates: templates),
+    );
+
+    if (chosen != null && mounted) {
+      setState(() {
+        _titleController.text = chosen.title;
+        _descriptionController.text = chosen.description ?? '';
+        _category = chosen.category;
+        _effortLevel = chosen.effortLevel;
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Submit
   // ---------------------------------------------------------------------------
 
@@ -312,20 +358,21 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
               ],
 
               // -----------------------------------------------------------------
-              // Start from a previous task (create mode only, TASK-107)
+              // Copy from existing task (create mode only, TASK-108)
               // -----------------------------------------------------------------
               if (!_isEditMode) ...[
-                _TemplateSuggestionsSection(
-                  householdId: widget.householdId,
-                  onSelected: (template) => setState(() {
-                    // Copy exactly title/description/category/effort_level
-                    // ("score"); the due date, chore type, recurrence and
-                    // assignee stay untouched for the admin to set fresh.
-                    _titleController.text = template.title;
-                    _descriptionController.text = template.description ?? '';
-                    _category = template.category;
-                    _effortLevel = template.effortLevel;
-                  }),
+                OutlinedButton.icon(
+                  key: const Key('copy_from_task_button'),
+                  onPressed: _pickTemplateToCopy,
+                  icon: const Icon(Icons.content_copy),
+                  label: const Text('Copy from existing task'),
+                  style: OutlinedButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 20),
               ],
@@ -723,92 +770,62 @@ class _RecurrenceSection extends StatelessWidget {
   }
 }
 
+
 // ---------------------------------------------------------------------------
-// "Start from a previous task" suggestions (TASK-107)
+// "Copy from existing task" bottom sheet (TASK-108)
 // ---------------------------------------------------------------------------
 
-class _TemplateSuggestionsSection extends ConsumerWidget {
-  const _TemplateSuggestionsSection({
-    required this.householdId,
-    required this.onSelected,
-  });
+class _CopyTaskSheet extends StatelessWidget {
+  const _CopyTaskSheet({required this.templates});
 
-  final String householdId;
-  final ValueChanged<ChoreTemplate> onSelected;
+  final List<ChoreTemplate> templates;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final templates = ref
-        .watch(choreTemplatesProvider(householdId))
-        .valueOrNull;
-
-    // Suggestions are optional — never show a loading/error state that could
-    // block the create form.
-    if (templates == null || templates.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Start from a previous task',
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Tap to fill the form — you can still change anything.',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: Colors.grey.shade600,
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 96,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: templates.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 10),
-            itemBuilder: (context, index) {
-              final template = templates[index];
-              return _TemplateCard(
-                template: template,
-                onTap: () => onSelected(template),
-                onRemove: () async {
-                  try {
-                    await ref
-                        .read(choreTemplatesProvider(householdId).notifier)
-                        .hideTemplate(template.id);
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(friendlyErrorMessage(e))),
-                      );
-                    }
-                  }
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Copy from existing task',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Select a task — title, description, category and score are copied.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: templates.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final template = templates[index];
+                  return _CopyTaskRow(template: template);
                 },
-              );
-            },
-          ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
-class _TemplateCard extends StatelessWidget {
-  const _TemplateCard({
-    required this.template,
-    required this.onTap,
-    required this.onRemove,
-  });
+class _CopyTaskRow extends StatelessWidget {
+  const _CopyTaskRow({required this.template});
 
   final ChoreTemplate template;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -818,76 +835,23 @@ class _TemplateCard extends StatelessWidget {
         categoryColors[template.category] ?? const Color(0xFF9CA3AF);
     final catIcon = categoryIcons[template.category];
 
-    return SizedBox(
-      width: 220,
-      child: Card(
-        key: Key('template_${template.id}'),
-        margin: EdgeInsets.zero,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        template.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(catIcon, size: 13, color: catColor),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              catLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        meta != null
-                            ? '${meta.label} · ${meta.points} pts'
-                            : template.effortLevel,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF0D9488),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  key: Key('remove_template_${template.id}'),
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                  tooltip: 'Remove from suggestions',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: onRemove,
-                ),
-              ],
-            ),
-          ),
-        ),
+    return ListTile(
+      key: Key('copy_task_${template.id}'),
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(catIcon, color: catColor),
+      title: Text(
+        template.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
+      subtitle: Text(
+        meta != null
+            ? '$catLabel · ${meta.label} · ${meta.points} pts'
+            : catLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onTap: () => Navigator.pop(context, template),
     );
   }
 }
