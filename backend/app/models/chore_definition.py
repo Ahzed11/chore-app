@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -41,6 +41,13 @@ class ChoreDefinition(Base, TimestampMixin):
     recurrence_rule: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     first_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # TASK-106: hides the definition from the create-form "start from a
+    # previous task" template list only — the chore and its instances are
+    # unaffected (hiding is NOT deleting).
+    hidden_from_suggestions: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     # relationships
     household: Mapped["Household"] = relationship(back_populates="chore_definitions")
