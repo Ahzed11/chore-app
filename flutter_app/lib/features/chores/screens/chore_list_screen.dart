@@ -61,7 +61,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
         case 'overdue':
           return c.isOverdue;
         case 'done':
-          return c.status == 'complete';
+          return c.status == 'complete' || c.status == 'dismissed';
         default:
           return true;
       }
@@ -201,7 +201,8 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                           .where(
                             (c) =>
                                 c.status != 'cancelled' &&
-                                c.status != 'complete',
+                                c.status != 'complete' &&
+                                c.status != 'dismissed',
                           )
                           .length,
                     ) ??
@@ -250,6 +251,9 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                                 final isMyChore =
                                     currentUserId != null &&
                                     chore.assigneeId == currentUserId;
+                                final isActionable =
+                                    chore.status == 'pending' ||
+                                    chore.status == 'overdue';
                                 return ChoreCard(
                                   key: Key('chore_card_${chore.id}'),
                                   chore: chore,
@@ -267,7 +271,31 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                                             _reassignChore(chore, memberId)
                                       : null,
                                   onCompleteTap:
-                                      isMyChore && chore.status != 'complete'
+                                      isMyChore &&
+                                          chore.status != 'complete' &&
+                                          chore.status != 'dismissed'
+                                      ? () => confirmCompleteChore(
+                                          context: context,
+                                          ref: ref,
+                                          householdId: widget.householdId,
+                                          chore: chore,
+                                        )
+                                      : null,
+                                  // Assignees dismiss their own chores; admins
+                                  // may dismiss any chore (TASK-104).
+                                  onDismiss:
+                                      isActionable && (isMyChore || isAdmin)
+                                      ? () => confirmDismissChore(
+                                          context: context,
+                                          ref: ref,
+                                          householdId: widget.householdId,
+                                          chore: chore,
+                                        )
+                                      : null,
+                                  onMarkDoneForAssignee:
+                                      isAdmin &&
+                                          isActionable &&
+                                          chore.assigneeId != null
                                       ? () => confirmCompleteChore(
                                           context: context,
                                           ref: ref,

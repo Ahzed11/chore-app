@@ -8,6 +8,7 @@ import '../../../core/constants/chore_constants.dart';
 import '../../../router/app_router.dart';
 import '../../../shared/widgets/accessible_tap.dart';
 import '../../../shared/widgets/avatar_colors.dart';
+import '../../auth/providers/current_user_provider.dart';
 import '../../household/models/member_model.dart';
 import '../models/chore_form_init_data.dart';
 import '../models/chore_model.dart';
@@ -36,6 +37,8 @@ class ChoreCard extends StatelessWidget {
     this.onCompleteTap,
     this.members = const [],
     this.onReassign,
+    this.onDismiss,
+    this.onMarkDoneForAssignee,
   });
 
   final ChoreModel chore;
@@ -45,7 +48,7 @@ class ChoreCard extends StatelessWidget {
   /// When false, the assignee row is replaced by a calendar-icon + due date row.
   final bool showAssignee;
 
-  /// If non-null and the chore is not complete, the status circle becomes tappable.
+  /// If non-null and the chore is not terminal, the status circle becomes tappable.
   final VoidCallback? onCompleteTap;
 
   /// Household members available to reassign this chore to. Passed down from
@@ -57,30 +60,45 @@ class ChoreCard extends StatelessWidget {
   /// is hidden.
   final ValueChanged<String>? onReassign;
 
+  /// Called when the user confirms dismissing this chore (close with zero
+  /// points). Wired for the assignee of the chore — and for admins, who may
+  /// dismiss any chore. When non-null the long-press menu is available and
+  /// gains a "Dismiss (no points)" entry.
+  final VoidCallback? onDismiss;
+
+  /// Called when an admin confirms completing this chore on the assignee's
+  /// behalf. When non-null the admin long-press menu gains a
+  /// "Mark done for {assignee}" entry.
+  final VoidCallback? onMarkDoneForAssignee;
+
   @override
   Widget build(BuildContext context) {
     final catColor = categoryColors[chore.category] ?? const Color(0xFF9CA3AF);
     final catLabel = categoryLabels[chore.category] ?? chore.category;
     final isRecurring = chore.choreType == 'recurring';
     final isComplete = chore.status == 'complete';
+    final isDismissed = chore.status == 'dismissed';
+    // Closed state — complete (points) or dismissed (no points). Both render
+    // muted; the points pill distinguishes them.
+    final isDone = isComplete || isDismissed;
     final isOverdue = chore.isOverdue;
 
     // Done state colours from design spec
-    final cardBg = isComplete ? const Color(0xFFF4F9F8) : Colors.white;
-    final cardBorder = isComplete
+    final cardBg = isDone ? const Color(0xFFF4F9F8) : Colors.white;
+    final cardBorder = isDone
         ? const Color(0xFFE6EFED)
         : const Color(0xFFEBF1F0);
-    final titleColor = isComplete
+    final titleColor = isDone
         ? const Color(0xFF9FB6B3)
         : const Color(0xFF0F2E2C);
-    final metaColor = isComplete
+    final metaColor = isDone
         ? const Color(0xFFB3C6C3)
         : const Color(0xFF8AA19E);
 
     // Due date colour: teal if today + pending, red if overdue, else meta
     final todayAndPending =
-        !isComplete && !isOverdue && _isToday(chore.dueDate);
-    final dueColor = isComplete
+        !isDone && !isOverdue && _isToday(chore.dueDate);
+    final dueColor = isDone
         ? metaColor
         : (isOverdue
               ? const Color(0xFFF87171)
@@ -88,14 +106,17 @@ class ChoreCard extends StatelessWidget {
 
     final statusLabel = isComplete
         ? 'Completed'
-        : (isOverdue ? 'Overdue' : 'Pending');
+        : (isDismissed
+              ? 'Dismissed'
+              : (isOverdue ? 'Overdue' : 'Pending'));
 
     Widget statusCircle = _StatusCircle(
       isComplete: isComplete,
+      isDismissed: isDismissed,
       isOverdue: isOverdue,
     );
 
-    if (onCompleteTap != null && !isComplete) {
+    if (onCompleteTap != null && !isDone) {
       // The visible circle is 30dp (below the 48dp minimum tap-target size);
       // `OverflowBox` lets the tap/ripple area grow to 48dp without shifting
       // the surrounding Row layout (TASK-066) — the extra hit area simply
@@ -119,7 +140,7 @@ class ChoreCard extends StatelessWidget {
       );
     }
 
-    // ---- Detail sheet tap target + admin long-press context menu ----
+    // ---- Detail sheet tap target + long-press context menu ----
     final semanticLabel = [
       chore.title,
       catLabel,
@@ -129,7 +150,7 @@ class ChoreCard extends StatelessWidget {
         (chore.assigneeName != null
             ? 'assigned to ${chore.assigneeName}'
             : 'unassigned'),
-      '${chore.pointValue} points',
+      isDismissed ? 'no points' : '${chore.pointValue} points',
     ].join(', ');
 
     Widget card = Container(
@@ -143,7 +164,9 @@ class ChoreCard extends StatelessWidget {
       child: AccessibleTap(
         key: Key('chore_card_tap_${chore.id}'),
         onTap: () => _showDetailSheet(context),
-        onLongPress: isAdmin ? () => _showAdminMenu(context) : null,
+        onLongPress: (isAdmin || onDismiss != null)
+            ? () => _showChoreMenu(context)
+            : null,
         label: semanticLabel,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
@@ -189,7 +212,7 @@ class ChoreCard extends StatelessWidget {
                             color: metaColor,
                           ),
                         ],
-                        if (isComplete) ...[
+                        if (isDone) ...[
                           const SizedBox(width: 6),
                           const _DonePill(),
                         ],
@@ -206,7 +229,7 @@ class ChoreCard extends StatelessWidget {
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: titleColor,
-                        decoration: isComplete
+                        decoration: isDone
                             ? TextDecoration.lineThrough
                             : null,
                         decorationColor: titleColor,
@@ -231,8 +254,12 @@ class ChoreCard extends StatelessWidget {
               const SizedBox(width: 10),
 
               // ---- Points ----
-              isComplete
-                  ? _PointsPill(points: chore.pointsAwarded ?? chore.pointValue)
+              isDone
+                  ? _PointsPill(
+                      points: isDismissed
+                          ? null
+                          : (chore.pointsAwarded ?? chore.pointValue),
+                    )
                   : Text(
                       '+${chore.pointValue}',
                       style: const TextStyle(
@@ -266,13 +293,19 @@ class ChoreCard extends StatelessWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // Admin context menu
+  // Long-press context menu (admins: full menu; assignees: dismiss their own)
   // ---------------------------------------------------------------------------
 
-  void _showAdminMenu(BuildContext context) {
+  void _showChoreMenu(BuildContext context) {
+    final isActionable =
+        chore.status == 'pending' || chore.status == 'overdue';
     final canReassign =
-        onReassign != null &&
-        (chore.status == 'pending' || chore.status == 'overdue');
+        isAdmin && onReassign != null && isActionable;
+    final canMarkDoneFor =
+        isAdmin &&
+        onMarkDoneForAssignee != null &&
+        chore.assigneeId != null &&
+        isActionable;
 
     showModalBottomSheet<void>(
       context: context,
@@ -306,31 +339,62 @@ class ChoreCard extends StatelessWidget {
                   _showMemberPicker(context);
                 },
               ),
-            ListTile(
-              key: const Key('edit_series_menu_item'),
-              leading: const Icon(Icons.edit_outlined, color: _teal),
-              title: const Text('Edit series', style: TextStyle(color: _teal)),
-              onTap: () {
-                Navigator.of(context).pop();
-                context.pushNamed(
-                  AppRoutes.createChore,
-                  pathParameters: {'householdId': chore.householdId},
-                  extra: ChoreFormInitData.fromModel(chore),
-                );
-              },
-            ),
-            ListTile(
-              key: const Key('delete_series_menu_item'),
-              leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text(
-                'Delete series',
-                style: TextStyle(color: Colors.red),
+            if (canMarkDoneFor)
+              ListTile(
+                key: const Key('mark_done_for_menu_item'),
+                leading: const Icon(Icons.task_alt_rounded, color: _teal),
+                title: Text(
+                  'Mark done for ${chore.assigneeName ?? 'assignee'}',
+                  style: const TextStyle(color: _teal),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  onMarkDoneForAssignee?.call();
+                },
               ),
-              onTap: () {
-                Navigator.of(context).pop();
-                onDeleteSeries?.call();
-              },
-            ),
+            if (isActionable && onDismiss != null)
+              ListTile(
+                key: const Key('dismiss_menu_item'),
+                leading: const Icon(Icons.close_rounded, color: _teal),
+                title: const Text(
+                  'Dismiss (no points)',
+                  style: TextStyle(color: _teal),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  onDismiss?.call();
+                },
+              ),
+            if (isAdmin) ...[
+              ListTile(
+                key: const Key('edit_series_menu_item'),
+                leading: const Icon(Icons.edit_outlined, color: _teal),
+                title: const Text(
+                  'Edit series',
+                  style: TextStyle(color: _teal),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  context.pushNamed(
+                    AppRoutes.createChore,
+                    pathParameters: {'householdId': chore.householdId},
+                    extra: ChoreFormInitData.fromModel(chore),
+                  );
+                },
+              ),
+              ListTile(
+                key: const Key('delete_series_menu_item'),
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text(
+                  'Delete series',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  onDeleteSeries?.call();
+                },
+              ),
+            ],
             const SizedBox(height: 8),
           ],
         ),
@@ -533,9 +597,14 @@ class _DueDateRow extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _StatusCircle extends StatelessWidget {
-  const _StatusCircle({required this.isComplete, required this.isOverdue});
+  const _StatusCircle({
+    required this.isComplete,
+    required this.isDismissed,
+    required this.isOverdue,
+  });
 
   final bool isComplete;
+  final bool isDismissed;
   final bool isOverdue;
 
   @override
@@ -543,11 +612,16 @@ class _StatusCircle extends StatelessWidget {
     const teal = Color(0xFF0D9488);
     const borderIdle = Color(0xFFD4E0DF);
     const borderOverdue = Color(0xFFF87171);
+    const grey = Color(0xFF9E9E9E);
 
     final borderColor = isComplete
         ? teal
-        : (isOverdue ? borderOverdue : borderIdle);
-    final fillColor = isComplete ? teal : Colors.transparent;
+        : (isOverdue
+              ? borderOverdue
+              : (isDismissed ? grey : borderIdle));
+    final fillColor = isComplete
+        ? teal
+        : (isDismissed ? grey : Colors.transparent);
 
     return Container(
       width: 30,
@@ -559,6 +633,8 @@ class _StatusCircle extends StatelessWidget {
       ),
       child: isComplete
           ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+          : isDismissed
+          ? const Icon(Icons.remove_rounded, size: 16, color: Colors.white)
           : isOverdue
           ? Icon(Icons.priority_high, size: 14, color: Colors.red.shade400)
           : null,
@@ -607,7 +683,8 @@ class _DonePill extends StatelessWidget {
 class _PointsPill extends StatelessWidget {
   const _PointsPill({required this.points});
 
-  final int points;
+  /// Awarded points; `null` renders "No points" (dismissed chores).
+  final int? points;
 
   @override
   Widget build(BuildContext context) {
@@ -620,10 +697,14 @@ class _PointsPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.check_rounded, size: 12, color: Colors.white),
+          Icon(
+            points == null ? Icons.close_rounded : Icons.check_rounded,
+            size: 12,
+            color: Colors.white,
+          ),
           const SizedBox(width: 3),
           Text(
-            '$points',
+            points == null ? 'No points' : '$points',
             style: const TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,
@@ -673,10 +754,29 @@ Future<void> confirmCompleteChore({
         .read(choresNotifierProvider(householdId).notifier)
         .completeChore(chore.id);
     if (!context.mounted) return;
-    final awarded = updatedChore.pointsAwarded ?? updatedChore.pointValue;
+
+    final currentUserId = ref.read(currentUserProvider).valueOrNull?.id;
+    final completedForOther =
+        updatedChore.assigneeId != null &&
+        updatedChore.assigneeId != currentUserId;
+    final awarded = updatedChore.pointsAwarded;
+
+    final String message;
+    if (completedForOther) {
+      // An admin completed this on the assignee's behalf — the points went
+      // to the assignee, so credit them in the copy (TASK-104).
+      final assignee = updatedChore.assigneeName ?? 'the assignee';
+      message = awarded != null
+          ? 'Marked done for $assignee — $awarded points'
+          : 'Marked done for $assignee';
+    } else {
+      message = awarded != null
+          ? 'You earned $awarded points!'
+          : 'Task completed';
+    }
     scaffoldMessenger.showSnackBar(
       SnackBar(
-        content: Text('You earned $awarded points!'),
+        content: Text(message),
         backgroundColor: _teal,
       ),
     );
@@ -816,6 +916,185 @@ class _ChoreCompleteSheet extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Dismiss-chore confirmation sheet + shared flow (TASK-104)
+// ---------------------------------------------------------------------------
+
+/// Shows a bottom sheet asking the user to confirm dismissing [chore] —
+/// closing it as done with zero points. Returns `true` when confirmed,
+/// `false`/`null` when dismissed.
+Future<bool?> showChoreDismissSheet(BuildContext context, ChoreModel chore) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => _ChoreDismissSheet(chore: chore),
+  );
+}
+
+/// Shared "dismiss" flow — shows the confirmation sheet, calls the
+/// dismiss-chore API, and surfaces a success/error snackbar. Mirrors
+/// [confirmCompleteChore] but awards nothing, so no leaderboard refresh is
+/// needed.
+Future<void> confirmDismissChore({
+  required BuildContext context,
+  required WidgetRef ref,
+  required String householdId,
+  required ChoreModel chore,
+}) async {
+  final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+  final confirmed = await showChoreDismissSheet(context, chore);
+  if (confirmed != true || !context.mounted) return;
+
+  try {
+    await ref
+        .read(choresNotifierProvider(householdId).notifier)
+        .dismissChore(chore.id);
+    if (!context.mounted) return;
+    scaffoldMessenger.showSnackBar(
+      const SnackBar(
+        content: Text('Task dismissed — no points awarded'),
+        backgroundColor: _teal,
+      ),
+    );
+  } on DioException catch (e) {
+    if (!context.mounted) return;
+    final code = e.response?.statusCode;
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          code == 409
+              ? 'This chore was already closed.'
+              : code == 403
+              ? 'You are not allowed to dismiss this chore.'
+              : 'Failed to dismiss chore. Please try again.',
+        ),
+      ),
+    );
+  } catch (_) {
+    if (!context.mounted) return;
+    scaffoldMessenger.showSnackBar(
+      const SnackBar(
+        content: Text('Failed to dismiss chore. Please try again.'),
+      ),
+    );
+  }
+}
+
+class _ChoreDismissSheet extends StatelessWidget {
+  const _ChoreDismissSheet({required this.chore});
+
+  final ChoreModel chore;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Text(
+              'Dismiss chore?',
+              key: const Key('dismiss_sheet_title'),
+              style: theme.textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              chore.title,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Effort: ${_capitalize(chore.effortLevel)}',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.close_rounded,
+                    color: Color(0xFF9E9E9E),
+                    size: 24,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Complete this task without awarding points?',
+                      key: const Key('dismiss_no_points_text'),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('dismiss_cancel_button'),
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('dismiss_confirm_button'),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _teal,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Dismiss'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
+// ---------------------------------------------------------------------------
 // Chore detail sheet — tap a card to see the description, category,
 // assignee, due date, and recurrence (TASK-067 F-17: the description used to
 // be write-only, only ever entered on the create/edit form).
@@ -832,9 +1111,12 @@ class _ChoreDetailSheet extends StatelessWidget {
     final catLabel = categoryLabels[chore.category] ?? chore.category;
     final catColor = categoryColors[chore.category] ?? const Color(0xFF9CA3AF);
     final isComplete = chore.status == 'complete';
+    final isDismissed = chore.status == 'dismissed';
     final statusLabel = isComplete
         ? 'Completed'
-        : (chore.isOverdue ? 'Overdue' : 'Pending');
+        : (isDismissed
+              ? 'Dismissed'
+              : (chore.isOverdue ? 'Overdue' : 'Pending'));
     final statusColor = chore.statusColor;
 
     return SafeArea(
@@ -878,9 +1160,11 @@ class _ChoreDetailSheet extends StatelessWidget {
                 _DetailChip(
                   icon: isComplete
                       ? Icons.check_circle_rounded
-                      : (chore.isOverdue
-                            ? Icons.priority_high_rounded
-                            : Icons.schedule_rounded),
+                      : (isDismissed
+                            ? Icons.remove_circle_outline_rounded
+                            : (chore.isOverdue
+                                  ? Icons.priority_high_rounded
+                                  : Icons.schedule_rounded)),
                   label: statusLabel,
                   color: statusColor,
                 ),
@@ -929,8 +1213,9 @@ class _ChoreDetailSheet extends StatelessWidget {
             _DetailRow(
               icon: Icons.star_border_rounded,
               label: 'Worth',
-              value:
-                  '${chore.pointsAwarded ?? chore.pointValue} points (${_capitalize(chore.effortLevel)} effort)',
+              value: isDismissed
+                  ? 'No points (${_capitalize(chore.effortLevel)} effort)'
+                  : '${chore.pointsAwarded ?? chore.pointValue} points (${_capitalize(chore.effortLevel)} effort)',
             ),
           ],
         ),

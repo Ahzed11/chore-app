@@ -96,6 +96,58 @@ class _DataChoresNotifier extends ChoresNotifier {
   Future<void> refresh() async {
     // no-op for most tests — refreshCallCount test uses subclass
   }
+
+  @override
+  Future<ChoreModel> completeChore(String instanceId) async {
+    // Avoids real network calls; mirrors the server response shape (points
+    // credited to the assignee, assignee_name preserved).
+    final chore = _chores.firstWhere(
+      (c) => c.id == instanceId,
+      orElse: () => _chores.first,
+    );
+    return ChoreModel(
+      id: chore.id,
+      definitionId: chore.definitionId,
+      householdId: chore.householdId,
+      assigneeId: chore.assigneeId,
+      assigneeName: chore.assigneeName,
+      assignedManually: chore.assignedManually,
+      dueDate: chore.dueDate,
+      status: 'complete',
+      completedAt: DateTime.now(),
+      pointsAwarded: chore.pointsAwarded ?? chore.pointValue,
+      title: chore.title,
+      description: chore.description,
+      category: chore.category,
+      effortLevel: chore.effortLevel,
+      choreType: chore.choreType,
+    );
+  }
+
+  @override
+  Future<ChoreModel> dismissChore(String instanceId) async {
+    final chore = _chores.firstWhere(
+      (c) => c.id == instanceId,
+      orElse: () => _chores.first,
+    );
+    return ChoreModel(
+      id: chore.id,
+      definitionId: chore.definitionId,
+      householdId: chore.householdId,
+      assigneeId: chore.assigneeId,
+      assigneeName: chore.assigneeName,
+      assignedManually: chore.assignedManually,
+      dueDate: chore.dueDate,
+      status: 'dismissed',
+      completedAt: DateTime.now(),
+      pointsAwarded: null,
+      title: chore.title,
+      description: chore.description,
+      category: chore.category,
+      effortLevel: chore.effortLevel,
+      choreType: chore.choreType,
+    );
+  }
 }
 
 class _LoadingChoresNotifier extends ChoresNotifier {
@@ -470,6 +522,179 @@ void main() {
       await tester.pump();
 
       expect(find.text('Smith Family'), findsOneWidget);
+    });
+
+    // -----------------------------------------------------------------------
+    // Dismissed chores + admin mark-done-for (TASK-104)
+    // -----------------------------------------------------------------------
+
+    testWidgets('Done filter includes dismissed chores', (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Pending chore',
+          status: 'pending',
+          dueDate: DateTime(2027, 12, 31),
+        ),
+        _chore(id: 'c2', title: 'Complete chore', status: 'complete'),
+        _chore(id: 'c3', title: 'Dismissed chore', status: 'dismissed'),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      // Visible under "All" (only cancelled is hidden).
+      expect(find.text('Dismissed chore'), findsOneWidget);
+
+      // The filter tab — `.first` because done cards also render a "Done"
+      // pill, and the tab row precedes the list in the tree.
+      await tester.tap(find.text('Done').first);
+      await tester.pump();
+
+      expect(find.text('Dismissed chore'), findsOneWidget);
+      expect(find.text('Complete chore'), findsOneWidget);
+      expect(find.text('Pending chore'), findsNothing);
+    });
+
+    testWidgets('dismissed chore shows "No points" and never its point value',
+        (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Dismissed chore',
+          status: 'dismissed',
+          effortLevel: 'hard', // 50 pts if it were ever worth points
+        ),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      expect(find.text('No points'), findsOneWidget);
+      expect(find.text('50'), findsNothing);
+      expect(find.text('+50'), findsNothing);
+    });
+
+    testWidgets('pending count excludes dismissed chores', (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Pending chore',
+          status: 'pending',
+          dueDate: DateTime(2027, 12, 31),
+        ),
+        _chore(id: 'c2', title: 'Dismissed chore', status: 'dismissed'),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      // Only the pending chore remains — the dismissed one is not counted.
+      expect(find.text('1 chore remaining'), findsOneWidget);
+    });
+
+    testWidgets('admin long-press menu shows Mark done for and Dismiss actions',
+        (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Vacuum',
+          status: 'pending',
+          assigneeId: 'user-2',
+          assigneeName: 'Alice',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(
+          choresNotifier: () => _DataChoresNotifier(chores),
+          households: [_household(role: 'admin')],
+        ),
+      );
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('chore_card_tap_c1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mark_done_for_menu_item')), findsOneWidget);
+      expect(find.text('Mark done for Alice'), findsOneWidget);
+      expect(find.byKey(const Key('dismiss_menu_item')), findsOneWidget);
+      expect(find.text('Dismiss (no points)'), findsOneWidget);
+    });
+
+    testWidgets(
+        'admin completing a member chore shows "Marked done for {name}" '
+        'snackbar and credits the assignee', (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Vacuum',
+          status: 'pending',
+          effortLevel: 'medium', // 25 pts
+          assigneeId: 'user-2',
+          assigneeName: 'Alice',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(
+          choresNotifier: () => _DataChoresNotifier(chores),
+          households: [_household(role: 'admin')],
+        ),
+      );
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('chore_card_tap_c1')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('mark_done_for_menu_item')));
+      await tester.pumpAndSettle();
+
+      // The complete confirmation sheet appears; confirm.
+      expect(find.byKey(const Key('complete_sheet_title')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm_done_button')));
+      await tester.pumpAndSettle();
+
+      // Snackbar credits the assignee, not the admin.
+      expect(
+        find.text('Marked done for Alice — 25 points'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('member long-pressing another user\'s chore gets no menu',
+        (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Vacuum',
+          status: 'pending',
+          assigneeId: 'user-2',
+          assigneeName: 'Alice',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        _buildScreen(
+          choresNotifier: () => _DataChoresNotifier(chores),
+          households: [_household(role: 'member')],
+        ),
+      );
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('chore_card_tap_c1')));
+      await tester.pumpAndSettle();
+
+      // No admin items, no dismiss item, no sheet at all.
+      expect(find.byKey(const Key('mark_done_for_menu_item')), findsNothing);
+      expect(find.byKey(const Key('dismiss_menu_item')), findsNothing);
+      expect(find.text('Dismiss (no points)'), findsNothing);
     });
   });
 }
