@@ -85,6 +85,18 @@ class ChoreDefinitionResponse(BaseModel):
     first_instance: Optional[ChoreInstanceResponse] = None
 
 
+class ChoreTemplateResponse(BaseModel):
+    """A definition offered as a create-form template (TASK-106)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str
+    description: Optional[str]
+    category: str
+    effort_level: str
+
+
 class ChoreReassignRequest(BaseModel):
     assignee_id: uuid.UUID | None = None
 

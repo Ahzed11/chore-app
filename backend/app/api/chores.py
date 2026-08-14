@@ -27,6 +27,7 @@ from app.schemas.chore import (
     ChoreInstanceResponse,
     ChoreInstanceStatus,
     ChoreReassignRequest,
+    ChoreTemplateResponse,
     ChoreUpdate,
     PaginatedChoreResponse,
 )
@@ -226,6 +227,79 @@ async def list_chores(
         for instance, definition, display_name in rows
     ]
     return PaginatedChoreResponse(items=instances, total=total, limit=limit, offset=offset)
+
+
+# ---------------------------------------------------------------------------
+# GET /households/{household_id}/chores/templates  — admin only
+#
+# TASK-106: active definitions usable as "start from a previous task"
+# suggestions on the create form. MUST be declared before the
+# /{instance_id} route below — FastAPI matches in declaration order and
+# "/templates" would otherwise be captured as a UUID path param (422).
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/templates",
+    response_model=list[ChoreTemplateResponse],
+)
+async def list_chore_templates(
+    household_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _membership: HouseholdMembership = Depends(require_admin),
+) -> list[ChoreTemplateResponse]:
+    """Active chore definitions usable as create-form templates, newest first.
+
+    Definitions hidden via ``POST .../hide`` are excluded; hiding does not
+    affect the chore list itself.
+    """
+    result = await db.execute(
+        select(ChoreDefinition)
+        .where(
+            ChoreDefinition.household_id == household_id,
+            ChoreDefinition.is_active.is_(True),
+            ChoreDefinition.hidden_from_suggestions.is_(False),
+        )
+        .order_by(ChoreDefinition.created_at.desc())
+    )
+    definitions = result.scalars().all()
+    return [ChoreTemplateResponse.model_validate(d) for d in definitions]
+
+
+# ---------------------------------------------------------------------------
+# POST /households/{household_id}/chores/{definition_id}/hide  — admin only
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{definition_id}/hide",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def hide_chore_template(
+    household_id: uuid.UUID,
+    definition_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _membership: HouseholdMembership = Depends(require_admin),
+) -> None:
+    """Stop showing a definition as a create-form template (admin only).
+
+    Sets ``hidden_from_suggestions``; the chore and its instances are
+    untouched.
+    """
+    result = await db.execute(
+        select(ChoreDefinition).where(
+            ChoreDefinition.id == definition_id,
+            ChoreDefinition.household_id == household_id,
+            ChoreDefinition.is_active.is_(True),
+        )
+    )
+    definition = result.scalar_one_or_none()
+
+    if definition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chore definition not found",
+        )
+
+    definition.hidden_from_suggestions = True
 
 
 # ---------------------------------------------------------------------------
