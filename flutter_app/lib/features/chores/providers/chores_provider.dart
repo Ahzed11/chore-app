@@ -142,6 +142,64 @@ class ChoresNotifier
     }
   }
 
+  /// Dismisses a chore instance — closes it as done with zero points and no
+  /// PointLedger entry.
+  ///
+  /// Mirrors [completeChore]: optimistic update for instant UI feedback,
+  /// replaced by the server's authoritative response on success, reverted on
+  /// failure (error rethrown so callers can surface it).
+  ///
+  /// Deliberately does NOT invalidate the leaderboard providers — dismissing
+  /// awards nothing, so standings are unchanged.
+  Future<ChoreModel> dismissChore(String instanceId) async {
+    final householdId = arg;
+    final dio = ref.read(dioProvider);
+
+    // Snapshot current state so we can revert on failure.
+    final previousState = state;
+
+    // Optimistic update: immediately show the chore as dismissed (no points).
+    state = state.whenData((chores) => [
+      for (final c in chores)
+        if (c.id == instanceId)
+          ChoreModel(
+            id: c.id,
+            definitionId: c.definitionId,
+            householdId: c.householdId,
+            assigneeId: c.assigneeId,
+            assigneeName: c.assigneeName,
+            assignedManually: c.assignedManually,
+            dueDate: c.dueDate,
+            status: 'dismissed',
+            completedAt: DateTime.now(),
+            pointsAwarded: null,
+            title: c.title,
+            description: c.description,
+            category: c.category,
+            effortLevel: c.effortLevel,
+            choreType: c.choreType,
+          )
+        else
+          c,
+    ]);
+
+    try {
+      final response = await dio.post<Map<String, dynamic>>(
+        ApiEndpoints.choreDismiss(householdId, instanceId),
+      );
+      // Replace optimistic entry with the authoritative server response.
+      final updatedChore = ChoreModel.fromJson(response.data!);
+      state = state.whenData((chores) => [
+        for (final c in chores)
+          if (c.id == instanceId) updatedChore else c,
+      ]);
+      return updatedChore;
+    } catch (e) {
+      state = previousState; // revert on failure
+      rethrow;
+    }
+  }
+
   /// Creates a new chore definition and its first instance. Admin only.
   Future<void> createChore(Map<String, dynamic> body) async {
     final householdId = arg;
