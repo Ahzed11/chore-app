@@ -94,25 +94,6 @@ class _FakeChoreTemplatesNotifier extends ChoreTemplatesNotifier {
   Future<void> hideTemplate(String definitionId) async {}
 }
 
-/// Records hide calls AND publishes the updated state so the UI actually
-/// rebuilds (see the fake-notifier pitfall: mutations must publish
-/// AsyncData or the widget never reflects them).
-class _TrackingTemplatesNotifier extends ChoreTemplatesNotifier {
-  _TrackingTemplatesNotifier(this._templates);
-  final List<ChoreTemplate> _templates;
-  final List<String> hiddenIds = [];
-
-  @override
-  Future<List<ChoreTemplate>> build(String arg) async => _templates;
-
-  @override
-  Future<void> hideTemplate(String definitionId) async {
-    hiddenIds.add(definitionId);
-    _templates.removeWhere((t) => t.id == definitionId);
-    state = AsyncData(List.of(_templates));
-  }
-}
-
 ChoreTemplate _template({
   String id = 't1',
   String title = 'Vacuum',
@@ -633,25 +614,19 @@ void main() {
     });
 
     // =========================================================================
-    // Template suggestions (TASK-107)
+    // Copy from existing task (TASK-108)
     // =========================================================================
 
-    group('template suggestions (TASK-107)', () {
-      testWidgets('shows suggestions in create mode, absent in edit mode',
+    group('copy from existing task (TASK-108)', () {
+      testWidgets('button present in create mode, absent in edit mode',
           (tester) async {
-        final templates = [_template()];
-
-        await tester.pumpWidget(_buildScreen(templates: templates));
-        // Two pumps: first resolves the admin check, second resolves the
-        // (async) templates provider so the section renders.
+        await tester.pumpWidget(_buildScreen());
         await tester.pump();
         await tester.pump();
 
-        expect(find.text('Start from a previous task'), findsOneWidget);
-        expect(find.byKey(const Key('template_t1')), findsOneWidget);
-        expect(find.byKey(const Key('remove_template_t1')), findsOneWidget);
+        expect(find.byKey(const Key('copy_from_task_button')), findsOneWidget);
 
-        // Edit mode: the section must not appear.
+        // Edit mode: no copy control.
         final editData = ChoreFormInitData(
           definitionId: 'def-42',
           title: 'Existing chore',
@@ -660,28 +635,29 @@ void main() {
           choreType: 'one_off',
           firstDueDate: DateTime.now().add(const Duration(days: 14)),
         );
-        await tester.pumpWidget(
-          _buildScreen(initData: editData, templates: templates),
-        );
+        await tester.pumpWidget(_buildScreen(initData: editData));
         await tester.pump();
         await tester.pump();
 
-        expect(find.text('Start from a previous task'), findsNothing);
-        expect(find.byKey(const Key('template_t1')), findsNothing);
+        expect(find.byKey(const Key('copy_from_task_button')), findsNothing);
       });
 
-      testWidgets('is hidden entirely when there are no suggestions',
-          (tester) async {
-        await tester.pumpWidget(_buildScreen());
+      testWidgets('no existing tasks → snackbar, no sheet', (tester) async {
+        _expandView(tester);
+        await tester.pumpWidget(_buildScreen()); // templates: const [] default
         await tester.pump();
         await tester.pump();
 
-        expect(find.text('Start from a previous task'), findsNothing);
+        await tester.tap(find.byKey(const Key('copy_from_task_button')));
+        await tester.pump();
+
+        expect(find.text('No existing tasks to copy yet.'), findsOneWidget);
+        expect(find.byKey(const Key('copy_task_t1')), findsNothing);
       });
 
       testWidgets(
-          'tapping a suggestion prefills title, description, category and '
-          'effort level', (tester) async {
+          'selecting a task copies title, description, category and effort '
+          'level', (tester) async {
         _expandView(tester);
         final templates = [
           _template(
@@ -697,8 +673,16 @@ void main() {
         await tester.pump();
         await tester.pump();
 
-        await tester.tap(find.text('Vacuum living room'));
-        await tester.pump();
+        await tester.tap(find.byKey(const Key('copy_from_task_button')));
+        await tester.pumpAndSettle();
+
+        // The sheet lists the task.
+        expect(find.byKey(const Key('copy_task_t1')), findsOneWidget);
+        expect(find.text('Vacuum living room'), findsWidgets);
+
+        // Select it.
+        await tester.tap(find.byKey(const Key('copy_task_t1')));
+        await tester.pumpAndSettle();
 
         // Title + description copied into the fields.
         expect(
@@ -725,28 +709,6 @@ void main() {
           ),
         );
         expect(selector.selected, contains('hard'));
-      });
-
-      testWidgets('remove button hides the suggestion via hideTemplate',
-          (tester) async {
-        _expandView(tester);
-        final notifier = _TrackingTemplatesNotifier([_template(id: 't1')]);
-
-        await tester.pumpWidget(
-          _buildScreen(templatesFactory: () => notifier),
-        );
-        await tester.pump();
-        await tester.pump();
-
-        expect(find.byKey(const Key('template_t1')), findsOneWidget);
-
-        await tester.tap(find.byKey(const Key('remove_template_t1')));
-        await tester.pump();
-        await tester.pump();
-
-        expect(notifier.hiddenIds, contains('t1'));
-        expect(find.byKey(const Key('template_t1')), findsNothing);
-        expect(find.text('Start from a previous task'), findsNothing);
       });
     });
   });
