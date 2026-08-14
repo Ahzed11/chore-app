@@ -89,8 +89,11 @@ class AuthFormNotifier extends Notifier<AuthFormState> {
         },
       );
 
-      // Auto-login after successful registration.
-      return login(email, password);
+      // Auto-login after successful registration. Awaiting keeps login
+      // failures inside this try block so the DioException handler below can
+      // surface them as an error state instead of letting them propagate
+      // uncaught (unawaited_return_in_try_block, Flutter 3.47 analyzer).
+      return await login(email, password);
     } on DioException catch (e) {
       final message = _extractMessage(e, fallback: 'Registration failed.');
       state = AuthFormState(errorMessage: message);
