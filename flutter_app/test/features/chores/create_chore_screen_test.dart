@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:chore_app/features/chores/models/chore_form_init_data.dart';
 import 'package:chore_app/features/chores/models/chore_model.dart';
+import 'package:chore_app/features/chores/models/chore_template.dart';
+import 'package:chore_app/features/chores/providers/chore_templates_provider.dart';
 import 'package:chore_app/features/chores/providers/chores_provider.dart';
 import 'package:chore_app/features/chores/screens/create_chore_screen.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
@@ -81,6 +83,52 @@ class _InstantChoresNotifier extends ChoresNotifier {
   }
 }
 
+class _FakeChoreTemplatesNotifier extends ChoreTemplatesNotifier {
+  _FakeChoreTemplatesNotifier(this._templates);
+  final List<ChoreTemplate> _templates;
+
+  @override
+  Future<List<ChoreTemplate>> build(String arg) async => _templates;
+
+  @override
+  Future<void> hideTemplate(String definitionId) async {}
+}
+
+/// Records hide calls AND publishes the updated state so the UI actually
+/// rebuilds (see the fake-notifier pitfall: mutations must publish
+/// AsyncData or the widget never reflects them).
+class _TrackingTemplatesNotifier extends ChoreTemplatesNotifier {
+  _TrackingTemplatesNotifier(this._templates);
+  final List<ChoreTemplate> _templates;
+  final List<String> hiddenIds = [];
+
+  @override
+  Future<List<ChoreTemplate>> build(String arg) async => _templates;
+
+  @override
+  Future<void> hideTemplate(String definitionId) async {
+    hiddenIds.add(definitionId);
+    _templates.removeWhere((t) => t.id == definitionId);
+    state = AsyncData(List.of(_templates));
+  }
+}
+
+ChoreTemplate _template({
+  String id = 't1',
+  String title = 'Vacuum',
+  String? description = 'Deep clean',
+  String category = 'living_room',
+  String effortLevel = 'hard',
+}) {
+  return ChoreTemplate(
+    id: id,
+    title: title,
+    description: description,
+    category: category,
+    effortLevel: effortLevel,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -99,6 +147,8 @@ Widget _buildScreen({
   bool isAdmin = true,
   List<MemberModel> members = const [],
   ChoresNotifier Function()? choresFactory,
+  List<ChoreTemplate> templates = const [],
+  ChoreTemplatesNotifier Function()? templatesFactory,
 }) {
   return ProviderScope(
     overrides: [
@@ -110,6 +160,9 @@ Widget _buildScreen({
       ),
       choresNotifierProvider.overrideWith(
         choresFactory ?? _LoadingChoresNotifier.new,
+      ),
+      choreTemplatesProvider.overrideWith(
+        templatesFactory ?? () => _FakeChoreTemplatesNotifier(templates),
       ),
     ],
     child: MaterialApp(
@@ -576,6 +629,124 @@ void main() {
         expect(find.byKey(const Key('type_recurring')), findsOneWidget);
         expect(find.byKey(const Key('due_date_field')), findsOneWidget);
         expect(find.byKey(const Key('submit_button')), findsOneWidget);
+      });
+    });
+
+    // =========================================================================
+    // Template suggestions (TASK-107)
+    // =========================================================================
+
+    group('template suggestions (TASK-107)', () {
+      testWidgets('shows suggestions in create mode, absent in edit mode',
+          (tester) async {
+        final templates = [_template()];
+
+        await tester.pumpWidget(_buildScreen(templates: templates));
+        // Two pumps: first resolves the admin check, second resolves the
+        // (async) templates provider so the section renders.
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.text('Start from a previous task'), findsOneWidget);
+        expect(find.byKey(const Key('template_t1')), findsOneWidget);
+        expect(find.byKey(const Key('remove_template_t1')), findsOneWidget);
+
+        // Edit mode: the section must not appear.
+        final editData = ChoreFormInitData(
+          definitionId: 'def-42',
+          title: 'Existing chore',
+          category: 'bedroom',
+          effortLevel: 'hard',
+          choreType: 'one_off',
+          firstDueDate: DateTime.now().add(const Duration(days: 14)),
+        );
+        await tester.pumpWidget(
+          _buildScreen(initData: editData, templates: templates),
+        );
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.text('Start from a previous task'), findsNothing);
+        expect(find.byKey(const Key('template_t1')), findsNothing);
+      });
+
+      testWidgets('is hidden entirely when there are no suggestions',
+          (tester) async {
+        await tester.pumpWidget(_buildScreen());
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.text('Start from a previous task'), findsNothing);
+      });
+
+      testWidgets(
+          'tapping a suggestion prefills title, description, category and '
+          'effort level', (tester) async {
+        _expandView(tester);
+        final templates = [
+          _template(
+            id: 't1',
+            title: 'Vacuum living room',
+            description: 'Including under the sofa',
+            category: 'living_room',
+            effortLevel: 'hard',
+          ),
+        ];
+
+        await tester.pumpWidget(_buildScreen(templates: templates));
+        await tester.pump();
+        await tester.pump();
+
+        await tester.tap(find.text('Vacuum living room'));
+        await tester.pump();
+
+        // Title + description copied into the fields.
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('title_field')),
+            matching: find.text('Vacuum living room'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('description_field')),
+            matching: find.text('Including under the sofa'),
+          ),
+          findsOneWidget,
+        );
+        // Category dropdown shows the copied category label.
+        expect(find.text('Living Room'), findsWidgets);
+        // Effort selector has 'hard' selected.
+        final selector = tester.widget<SegmentedButton<String>>(
+          find.descendant(
+            of: find.byKey(const Key('effort_level_selector')),
+            matching: find.byType(SegmentedButton<String>),
+          ),
+        );
+        expect(selector.selected, contains('hard'));
+      });
+
+      testWidgets('remove button hides the suggestion via hideTemplate',
+          (tester) async {
+        _expandView(tester);
+        final notifier = _TrackingTemplatesNotifier([_template(id: 't1')]);
+
+        await tester.pumpWidget(
+          _buildScreen(templatesFactory: () => notifier),
+        );
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.byKey(const Key('template_t1')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('remove_template_t1')));
+        await tester.pump();
+        await tester.pump();
+
+        expect(notifier.hiddenIds, contains('t1'));
+        expect(find.byKey(const Key('template_t1')), findsNothing);
+        expect(find.text('Start from a previous task'), findsNothing);
       });
     });
   });
