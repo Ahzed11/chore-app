@@ -37,7 +37,7 @@ class ChoreModel {
   final String? assigneeName;
   final bool assignedManually;
   final DateTime dueDate;
-  final String status; // pending | complete | overdue | cancelled
+  final String status; // pending | complete | overdue | cancelled | dismissed
   final DateTime? completedAt;
   final int? pointsAwarded;
   final String title;
@@ -75,6 +75,10 @@ class ChoreModel {
         return const Color(0xFFD32F2F); // red
       case 'cancelled':
         return const Color(0xFF9E9E9E); // grey
+      case 'dismissed':
+        // Closed without points — same muted grey as cancelled; never green
+        // (would falsely suggest points were earned).
+        return const Color(0xFF9E9E9E);
       case 'pending':
       default:
         return const Color(0xFF2196F3); // blue

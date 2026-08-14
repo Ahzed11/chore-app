@@ -21,7 +21,7 @@ ChoreType = Literal["one_off", "recurring"]
 IntervalUnit = Literal["days", "weeks", "months"]
 
 # Mirrors the "chore_status" PostgreSQL enum defined on ChoreInstance.status.
-ChoreInstanceStatus = Literal["pending", "complete", "overdue", "cancelled"]
+ChoreInstanceStatus = Literal["pending", "complete", "overdue", "cancelled", "dismissed"]
 
 
 class RecurrenceRule(BaseModel):

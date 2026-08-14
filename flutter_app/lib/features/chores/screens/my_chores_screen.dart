@@ -82,7 +82,8 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                   : allChores
                         .where(
                           (c) =>
-                              c.assigneeId == userId && c.status != 'cancelled',
+                              c.assigneeId == userId &&
+                              c.status != 'cancelled',
                         )
                         .toList();
 
@@ -95,11 +96,18 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                     ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
               final todo = [...overdue, ...pending];
               final done =
-                  myChores.where((c) => c.status == 'complete').toList()..sort(
-                    (a, b) => (b.completedAt ?? b.dueDate).compareTo(
-                      a.completedAt ?? a.dueDate,
-                    ),
-                  );
+                  myChores
+                      .where(
+                        (c) =>
+                            c.status == 'complete' ||
+                            c.status == 'dismissed',
+                      )
+                      .toList()
+                    ..sort(
+                      (a, b) => (b.completedAt ?? b.dueDate).compareTo(
+                        a.completedAt ?? a.dueDate,
+                      ),
+                    );
 
               final viewList = _activeTab == 'todo' ? todo : done;
 
@@ -118,7 +126,16 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                         c.completedAt != null &&
                         !c.completedAt!.isBefore(weekStart),
                   )
-                  .fold(0, (sum, c) => sum + (c.pointsAwarded ?? c.pointValue));
+                  .fold(
+                    0,
+                    // Dismissed chores are closed with zero points — they must
+                    // never count toward the weekly total (TASK-104).
+                    (sum, c) =>
+                        sum +
+                        (c.status == 'dismissed'
+                            ? 0
+                            : (c.pointsAwarded ?? c.pointValue)),
+                  );
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -182,8 +199,23 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                                     key: Key('my_chore_card_${chore.id}'),
                                     chore: chore,
                                     showAssignee: false,
-                                    onCompleteTap: chore.status != 'complete'
+                                    onCompleteTap:
+                                        chore.status != 'complete' &&
+                                            chore.status != 'dismissed'
                                         ? () => confirmCompleteChore(
+                                            context: context,
+                                            ref: ref,
+                                            householdId: widget.householdId,
+                                            chore: chore,
+                                          )
+                                        : null,
+                                    // Every chore here is the current user's
+                                    // own — dismiss is always available while
+                                    // actionable (TASK-104).
+                                    onDismiss:
+                                        chore.status == 'pending' ||
+                                            chore.status == 'overdue'
+                                        ? () => confirmDismissChore(
                                             context: context,
                                             ref: ref,
                                             householdId: widget.householdId,

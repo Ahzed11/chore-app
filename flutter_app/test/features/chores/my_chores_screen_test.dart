@@ -80,6 +80,17 @@ class _FakeChoresNotifier extends ChoresNotifier {
     );
     return _asComplete(chore);
   }
+
+  @override
+  Future<ChoreModel> dismissChore(String instanceId) async {
+    // Avoids real network calls in tests; returns a plausible "dismissed"
+    // version of the matching chore (or the first one as a fallback).
+    final chore = _chores.firstWhere(
+      (c) => c.id == instanceId,
+      orElse: () => _chores.first,
+    );
+    return _asDismissed(chore);
+  }
 }
 
 /// Returns a copy of [chore] marked complete, mirroring what the real
@@ -104,6 +115,28 @@ ChoreModel _asComplete(ChoreModel chore) {
   );
 }
 
+/// Returns a copy of [chore] marked dismissed (zero points), mirroring what
+/// the real `dismissChore` returns from the server response.
+ChoreModel _asDismissed(ChoreModel chore) {
+  return ChoreModel(
+    id: chore.id,
+    definitionId: chore.definitionId,
+    householdId: chore.householdId,
+    assigneeId: chore.assigneeId,
+    assigneeName: chore.assigneeName,
+    assignedManually: chore.assignedManually,
+    dueDate: chore.dueDate,
+    status: 'dismissed',
+    completedAt: DateTime.now(),
+    pointsAwarded: null,
+    title: chore.title,
+    description: chore.description,
+    category: chore.category,
+    effortLevel: chore.effortLevel,
+    choreType: chore.choreType,
+  );
+}
+
 class _LoadingChoresNotifier extends ChoresNotifier {
   @override
   Future<List<ChoreModel>> build(String arg) =>
@@ -119,6 +152,18 @@ class _TrackingChoresNotifier extends _FakeChoresNotifier {
   Future<ChoreModel> completeChore(String instanceId) async {
     completedIds.add(instanceId);
     return super.completeChore(instanceId);
+  }
+}
+
+class _TrackingDismissNotifier extends _FakeChoresNotifier {
+  _TrackingDismissNotifier(super.chores);
+
+  final List<String> dismissedIds = [];
+
+  @override
+  Future<ChoreModel> dismissChore(String instanceId) async {
+    dismissedIds.add(instanceId);
+    return super.dismissChore(instanceId);
   }
 }
 
@@ -727,6 +772,119 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(notifier.completedIds, contains('c1'));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Dismissed chores (TASK-104)
+  // -------------------------------------------------------------------------
+
+  group('MyChoresScreen – dismissed chores (TASK-104)', () {
+    testWidgets(
+        'dismissed chore appears in Done with "No points", counts 0 in the '
+        'weekly banner, and has no mark-done button', (tester) async {
+      final now = DateTime.now();
+      final chores = [
+        // Dismissed this week — must count 0 toward the banner.
+        _chore(
+          id: 'c_dismissed',
+          status: 'dismissed',
+          dueDate: now.subtract(const Duration(days: 5)),
+          completedAt: now,
+        ),
+        // Completed this week — 25 pts.
+        _chore(
+          id: 'c_complete',
+          status: 'complete',
+          pointsAwarded: 25,
+          dueDate: now.subtract(const Duration(days: 4)),
+          completedAt: now,
+        ),
+      ];
+
+      await tester.pumpWidget(_buildScreen(chores: chores));
+      await tester.pump();
+
+      // Dismissed chores never appear in the "To Do" list.
+      expect(find.byKey(const Key('my_chore_card_c_dismissed')), findsNothing);
+      expect(find.byKey(const Key('my_chore_card_c_complete')), findsNothing);
+
+      await tester.tap(find.text('Done'));
+      await tester.pump();
+
+      expect(find.byKey(const Key('my_chore_card_c_dismissed')), findsOneWidget);
+      // "No points" pill, not the chore's point value.
+      expect(find.text('No points'), findsOneWidget);
+      // Banner: 25 (complete) + 0 (dismissed) = 25.
+      expect(find.text('25 pts'), findsOneWidget);
+      // Terminal status — no mark-done affordance.
+      expect(
+        find.byKey(const Key('mark_done_button_c_dismissed')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('dismiss flow: long-press → Dismiss → confirm → snackbar + API call',
+        (tester) async {
+      final notifier = _TrackingDismissNotifier([
+        _chore(id: 'c1', status: 'pending', dueDate: DateTime(2027, 3, 1)),
+      ]);
+
+      await tester.pumpWidget(
+        _buildScreen(
+          chores: [],
+          notifierFactory: () => notifier,
+        ),
+      );
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('chore_card_tap_c1')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dismiss (no points)'), findsOneWidget);
+
+      await tester.tap(find.text('Dismiss (no points)'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('dismiss_sheet_title')), findsOneWidget);
+      expect(
+        find.text('Complete this task without awarding points?'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('dismiss_confirm_button')));
+      await tester.pumpAndSettle();
+
+      expect(notifier.dismissedIds, contains('c1'));
+      expect(
+        find.text('Task dismissed — no points awarded'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('dismiss cancel closes the sheet without calling the API',
+        (tester) async {
+      final notifier = _TrackingDismissNotifier([
+        _chore(id: 'c1', status: 'pending', dueDate: DateTime(2027, 3, 1)),
+      ]);
+
+      await tester.pumpWidget(
+        _buildScreen(
+          chores: [],
+          notifierFactory: () => notifier,
+        ),
+      );
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('chore_card_tap_c1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Dismiss (no points)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dismiss_cancel_button')));
+      await tester.pumpAndSettle();
+
+      expect(notifier.dismissedIds, isEmpty);
+      expect(find.byKey(const Key('dismiss_sheet_title')), findsNothing);
     });
   });
 

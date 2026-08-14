@@ -62,7 +62,10 @@ Map<String, dynamic> _choreJson(
     'assigned_manually': false,
     'due_date': '2027-01-01T00:00:00Z',
     'status': status,
-    'completed_at': status == 'complete' ? '2027-01-01T00:00:00Z' : null,
+    'completed_at':
+        (status == 'complete' || status == 'dismissed')
+        ? '2027-01-01T00:00:00Z'
+        : null,
     'points_awarded': pointsAwarded,
     'title': 'Chore $id',
     'description': null,
@@ -237,6 +240,122 @@ void main() {
       await container.read(leaderboardProvider('hh-1').future);
       await container.read(weeklyLeaderboardProvider('hh-1').future);
       expect(leaderboardFetches, 4);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // TASK-103: dismissChore — zero points, no leaderboard invalidation
+  // ---------------------------------------------------------------------------
+
+  group('dismissChore (TASK-103)', () {
+    test(
+        'posts to the dismiss endpoint, updates state, and does NOT '
+        'invalidate the leaderboard providers', () async {
+      var leaderboardFetches = 0;
+      var dismissPosted = false;
+
+      final dio = _dio((options) async {
+        if (options.path == '/households/hh-1/chores') {
+          return _json(
+            {
+              'items': [_choreJson('c1')],
+              'total': 1,
+              'limit': 100,
+              'offset': 0,
+            },
+            200,
+          );
+        }
+        if (options.path == '/households/hh-1/chores/c1/dismiss') {
+          expect(options.method, 'POST');
+          dismissPosted = true;
+          return _json(_choreJson('c1', status: 'dismissed'), 200);
+        }
+        if (options.path == '/households/hh-1/leaderboard') {
+          leaderboardFetches++;
+          return _json(
+            {
+              'entries': <dynamic>[],
+              'scope': options.queryParameters['scope'],
+              'requesting_user_rank': 1,
+            },
+            200,
+          );
+        }
+        throw StateError('Unexpected request path: ${options.path}');
+      });
+
+      final container = ProviderContainer(
+        overrides: [dioProvider.overrideWithValue(dio)],
+      );
+      addTearDown(container.dispose);
+
+      // Prime both leaderboard providers.
+      await container.read(leaderboardProvider('hh-1').future);
+      await container.read(weeklyLeaderboardProvider('hh-1').future);
+      expect(leaderboardFetches, 2);
+
+      final updated = await container
+          .read(choresNotifierProvider('hh-1').notifier)
+          .dismissChore('c1');
+
+      expect(dismissPosted, isTrue);
+      expect(updated.status, 'dismissed');
+      expect(updated.pointsAwarded, isNull);
+
+      // Chores list state is updated from the server response.
+      final list = container.read(choresNotifierProvider('hh-1'));
+      expect(list.valueOrNull?.single.status, 'dismissed');
+
+      // Dismissing awards nothing — re-reading the leaderboards must NOT hit
+      // the network (no invalidation happened).
+      await container.read(leaderboardProvider('hh-1').future);
+      await container.read(weeklyLeaderboardProvider('hh-1').future);
+      expect(leaderboardFetches, 2);
+    });
+
+    test('reverts the optimistic update and rethrows on failure', () async {
+      final dio = _dio((options) async {
+        if (options.path == '/households/hh-1/chores') {
+          return _json(
+            {
+              'items': [_choreJson('c1')],
+              'total': 1,
+              'limit': 100,
+              'offset': 0,
+            },
+            200,
+          );
+        }
+        if (options.path == '/households/hh-1/chores/c1/dismiss') {
+          throw DioException(
+            requestOptions: options,
+            response: Response(
+              requestOptions: options,
+              statusCode: 409,
+              data: {'detail': 'already terminal'},
+            ),
+            type: DioExceptionType.badResponse,
+          );
+        }
+        throw StateError('Unexpected request path: ${options.path}');
+      });
+
+      final container = ProviderContainer(
+        overrides: [dioProvider.overrideWithValue(dio)],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(choresNotifierProvider('hh-1').future);
+
+      await expectLater(
+        container.read(choresNotifierProvider('hh-1').notifier).dismissChore('c1'),
+        throwsA(isA<DioException>()),
+      );
+
+      // Optimistic update reverted: the chore is back to pending.
+      final list = container.read(choresNotifierProvider('hh-1'));
+      expect(list.valueOrNull?.single.status, 'pending');
     });
   });
 }
