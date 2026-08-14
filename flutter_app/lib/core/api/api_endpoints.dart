@@ -20,6 +20,8 @@ class ApiEndpoints {
       '/households/$hId/chores/$definitionId';
   static String choreComplete(String hId, String cId) =>
       '/households/$hId/chores/$cId/complete';
+  static String choreDismiss(String hId, String cId) =>
+      '/households/$hId/chores/$cId/dismiss';
   static String leaderboard(String id) => '/households/$id/leaderboard';
   static String acceptInvite(String token) => '/invites/$token/accept';
 

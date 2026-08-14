@@ -34,6 +34,7 @@ def _get_session_factory() -> async_sessionmaker:
 
 _ASSIGNEE_ID = uuid.uuid4()
 _NON_ASSIGNEE_ID = uuid.uuid4()
+_ADMIN_ID = uuid.uuid4()
 
 fake_assignee = User(
     id=_ASSIGNEE_ID,
@@ -49,6 +50,13 @@ fake_non_assignee = User(
     password_hash="x",
 )
 
+fake_admin = User(
+    id=_ADMIN_ID,
+    email="admin@test.com",
+    display_name="Admin",
+    password_hash="x",
+)
+
 fake_assignee_membership = HouseholdMembership(
     id=uuid.uuid4(),
     household_id=uuid.uuid4(),  # placeholder; ignored when overriding
@@ -60,9 +68,18 @@ fake_assignee_membership = HouseholdMembership(
 
 fake_non_assignee_membership = HouseholdMembership(
     id=uuid.uuid4(),
-    household_id=uuid.uuid4(),
+    household_id=uuid.uuid4(),  # placeholder; ignored when overriding
     user_id=_NON_ASSIGNEE_ID,
     role="member",
+    joined_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    is_active=True,
+)
+
+fake_admin_membership = HouseholdMembership(
+    id=uuid.uuid4(),
+    household_id=uuid.uuid4(),  # placeholder; ignored when overriding
+    user_id=_ADMIN_ID,
+    role="admin",
     joined_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
     is_active=True,
 )
@@ -76,12 +93,20 @@ def _override_current_user_non_assignee() -> User:
     return fake_non_assignee
 
 
+def _override_current_user_admin() -> User:
+    return fake_admin
+
+
 def _override_require_member_assignee() -> HouseholdMembership:
     return fake_assignee_membership
 
 
 def _override_require_member_non_assignee() -> HouseholdMembership:
     return fake_non_assignee_membership
+
+
+def _override_require_member_admin() -> HouseholdMembership:
+    return fake_admin_membership
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +154,7 @@ async def async_client(_database_schema: None) -> AsyncGenerator[AsyncClient, No
 # ---------------------------------------------------------------------------
 
 async def _seed_household_and_users(sf: async_sessionmaker) -> uuid.UUID:
-    """Create a Household plus both fake users and their memberships.
+    """Create a Household plus the fake users and their memberships.
 
     Returns the household_id.
     """
@@ -148,10 +173,20 @@ async def _seed_household_and_users(sf: async_sessionmaker) -> uuid.UUID:
             display_name="NonAssignee",
             password_hash="x",
         )
-        session.add_all([household, assignee_user, non_assignee_user])
+        admin_user = User(
+            id=_ADMIN_ID,
+            email="admin@test.com",
+            display_name="Admin",
+            password_hash="x",
+        )
+        session.add_all([household, assignee_user, non_assignee_user, admin_user])
         await session.flush()
 
-        for user_id, role in ((_ASSIGNEE_ID, "member"), (_NON_ASSIGNEE_ID, "member")):
+        for user_id, role in (
+            (_ASSIGNEE_ID, "member"),
+            (_NON_ASSIGNEE_ID, "member"),
+            (_ADMIN_ID, "admin"),
+        ):
             session.add(
                 HouseholdMembership(
                     id=uuid.uuid4(),
@@ -173,9 +208,15 @@ async def _seed_chore_instance(
     effort_level: str = "easy",
     assignee_id: uuid.UUID | None = None,
     status: str = "pending",
+    unassigned: bool = False,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """Create a ChoreDefinition and ChoreInstance; return (definition_id, instance_id)."""
-    if assignee_id is None:
+    """Create a ChoreDefinition and ChoreInstance; return (definition_id, instance_id).
+
+    Defaults to assigning the instance to ``_ASSIGNEE_ID``; pass
+    ``unassigned=True`` to seed a truly unassigned instance (``assignee_id``
+    NULL — e.g. member removed after assignment).
+    """
+    if not unassigned and assignee_id is None:
         assignee_id = _ASSIGNEE_ID
 
     async with sf() as session:
@@ -355,6 +396,214 @@ async def test_completing_cancelled_chore_returns_409(
         f"/households/{household_id}/chores/{instance_id}/complete"
     )
     assert response.status_code == 409, response.text
+
+
+# ---------------------------------------------------------------------------
+# Tests: dismiss — zero points, no PointLedger row (TASK-102)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_assignee_dismisses_own_pending_chore(async_client: AsyncClient) -> None:
+    """Assignee dismissing their own pending chore: closed with zero points.
+
+    The instance must not get a PointLedger row, so leaderboard totals are
+    unchanged.
+    """
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, effort_level="hard", status="pending"
+    )
+
+    response = await async_client.post(
+        f"/households/{household_id}/chores/{instance_id}/dismiss"
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["status"] == "dismissed"
+    assert data["points_awarded"] is None
+    assert data["completed_at"] is not None
+
+    # No PointLedger row for the instance — leaderboard totals unchanged.
+    async with sf() as session:
+        ledger_result = await session.execute(
+            select(PointLedger).where(PointLedger.chore_instance_id == instance_id)
+        )
+        assert ledger_result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_admin_dismisses_members_chore(async_client: AsyncClient) -> None:
+    """An admin can dismiss a member's chore on their behalf; still zero points."""
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, status="pending"
+    )
+
+    app.dependency_overrides[get_current_user] = _override_current_user_admin
+    app.dependency_overrides[require_household_member] = _override_require_member_admin
+    try:
+        response = await async_client.post(
+            f"/households/{household_id}/chores/{instance_id}/dismiss"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "dismissed"
+        assert data["points_awarded"] is None
+    finally:
+        app.dependency_overrides[get_current_user] = _override_current_user_assignee
+        app.dependency_overrides[require_household_member] = (
+            _override_require_member_assignee
+        )
+
+    async with sf() as session:
+        ledger_result = await session.execute(
+            select(PointLedger).where(PointLedger.chore_instance_id == instance_id)
+        )
+        assert ledger_result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_non_assignee_non_admin_cannot_dismiss_chore(
+    async_client: AsyncClient,
+) -> None:
+    """A household member who is neither assignee nor admin receives HTTP 403."""
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, status="pending"
+    )
+
+    app.dependency_overrides[get_current_user] = _override_current_user_non_assignee
+    app.dependency_overrides[require_household_member] = (
+        _override_require_member_non_assignee
+    )
+    try:
+        response = await async_client.post(
+            f"/households/{household_id}/chores/{instance_id}/dismiss"
+        )
+        assert response.status_code == 403, response.text
+    finally:
+        app.dependency_overrides[get_current_user] = _override_current_user_assignee
+        app.dependency_overrides[require_household_member] = (
+            _override_require_member_assignee
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["complete", "cancelled", "dismissed"])
+async def test_dismiss_terminal_instance_returns_409(
+    async_client: AsyncClient, status: str
+) -> None:
+    """Dismissing an already-terminal instance (complete/cancelled/dismissed) → 409."""
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, status=status
+    )
+
+    response = await async_client.post(
+        f"/households/{household_id}/chores/{instance_id}/dismiss"
+    )
+    assert response.status_code == 409, response.text
+
+
+# ---------------------------------------------------------------------------
+# Tests: admin completes on the assignee's behalf (TASK-102)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_admin_completes_members_chore_credits_assignee(
+    async_client: AsyncClient,
+) -> None:
+    """Admin completing a member's chore awards points to the assignee, not admin."""
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, effort_level="medium", status="pending"
+    )
+
+    app.dependency_overrides[get_current_user] = _override_current_user_admin
+    app.dependency_overrides[require_household_member] = _override_require_member_admin
+    try:
+        response = await async_client.post(
+            f"/households/{household_id}/chores/{instance_id}/complete"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "complete"
+        assert data["points_awarded"] == 25  # medium = 25
+        assert data["assignee_name"] == "Assignee"
+    finally:
+        app.dependency_overrides[get_current_user] = _override_current_user_assignee
+        app.dependency_overrides[require_household_member] = (
+            _override_require_member_assignee
+        )
+
+    # The PointLedger row is credited to the assignee, never the admin.
+    async with sf() as session:
+        assignee_ledger = await session.execute(
+            select(PointLedger).where(
+                PointLedger.chore_instance_id == instance_id,
+                PointLedger.user_id == _ASSIGNEE_ID,
+            )
+        )
+        ledger = assignee_ledger.scalar_one_or_none()
+        assert ledger is not None, "Assignee should have received the points"
+        assert ledger.points == 25
+
+        admin_ledger = await session.execute(
+            select(PointLedger).where(
+                PointLedger.chore_instance_id == instance_id,
+                PointLedger.user_id == _ADMIN_ID,
+            )
+        )
+        assert admin_ledger.scalar_one_or_none() is None, (
+            "Admin must never be credited for a chore they completed on "
+            "someone's behalf"
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_completes_unassigned_chore_awards_nothing(
+    async_client: AsyncClient,
+) -> None:
+    """Admin completing a chore whose assignee was removed: closes with no points.
+
+    ``assignee_id`` is NULL (member removed after assignment); the instance is
+    completed but no PointLedger row is created (the user FK is non-nullable)
+    and ``points_awarded`` stays NULL.
+    """
+    sf = _get_session_factory()
+    household_id = await _seed_household_and_users(sf)
+    _def_id, instance_id = await _seed_chore_instance(
+        sf, household_id, status="pending", unassigned=True
+    )
+
+    app.dependency_overrides[get_current_user] = _override_current_user_admin
+    app.dependency_overrides[require_household_member] = _override_require_member_admin
+    try:
+        response = await async_client.post(
+            f"/households/{household_id}/chores/{instance_id}/complete"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "complete"
+        assert data["points_awarded"] is None
+        assert data["assignee_name"] is None
+    finally:
+        app.dependency_overrides[get_current_user] = _override_current_user_assignee
+        app.dependency_overrides[require_household_member] = (
+            _override_require_member_assignee
+        )
+
+    async with sf() as session:
+        ledger_result = await session.execute(
+            select(PointLedger).where(PointLedger.chore_instance_id == instance_id)
+        )
+        assert ledger_result.scalar_one_or_none() is None
 
 
 # ---------------------------------------------------------------------------

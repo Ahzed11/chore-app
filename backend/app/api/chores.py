@@ -266,29 +266,35 @@ async def get_chore_instance(
 
 
 # ---------------------------------------------------------------------------
-# POST /households/{household_id}/chores/{instance_id}/complete  — assignee only
+# POST /households/{household_id}/chores/{instance_id}/complete|dismiss
+# — assignee, or admin acting on the assignee's behalf
 # ---------------------------------------------------------------------------
 
 _TERMINAL_STATUSES = {"complete", "cancelled", "dismissed"}
 
 
-@router.post(
-    "/{instance_id}/complete",
-    response_model=ChoreInstanceResponse,
-)
-async def complete_chore_instance(
+async def _load_instance_for_terminal_transition(
+    db: AsyncSession,
     household_id: uuid.UUID,
     instance_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    _membership: HouseholdMembership = Depends(require_household_member),
-) -> ChoreInstanceResponse:
-    """Mark a ChoreInstance as complete, award points, and record a PointLedger entry.
+    *,
+    current_user: User,
+    membership: HouseholdMembership,
+    forbidden_detail: str,
+    terminal_verb: str,
+) -> ChoreInstance:
+    """Lock an instance and enforce the rules shared by terminal transitions.
 
-    Only the assigned user may complete the instance.  Attempting to complete an
-    already-complete or cancelled instance returns HTTP 409.
+    Shared prologue for the ``complete``/``dismiss`` endpoints — the single
+    source of truth for their permission model:
+
+    - 404 when the instance is not in this household.
+    - 403 unless the caller is the assignee or a household admin. Admins act
+      on the assignee's behalf; any points awarded go to the assignee.
+    - 409 when the instance is already in a terminal status.
+
+    Returns the locked instance.
     """
-    # Lock the row to prevent concurrent double-completion.
     lock_result = await db.execute(
         select(ChoreInstance)
         .where(
@@ -305,21 +311,32 @@ async def complete_chore_instance(
             detail="Chore instance not found",
         )
 
-    # Only the assignee may complete the instance.
-    if instance.assignee_id != current_user.id:
+    is_assignee = (
+        instance.assignee_id is not None and instance.assignee_id == current_user.id
+    )
+    is_admin = membership.role == "admin"
+    if not (is_assignee or is_admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the assigned user may complete this chore",
+            detail=forbidden_detail,
         )
 
-    # Guard against double-completion or completing a cancelled chore.
     if instance.status in _TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Chore instance is already '{instance.status}' and cannot be completed",
+            detail=(
+                f"Chore instance is already '{instance.status}' "
+                f"and cannot be {terminal_verb}"
+            ),
         )
 
-    # Fetch the definition to read effort_level.
+    return instance
+
+
+async def _definition_or_422(
+    db: AsyncSession, instance: ChoreInstance
+) -> ChoreDefinition:
+    """Fetch the definition backing ``instance``; 422 when it no longer exists."""
     def_result = await db.execute(
         select(ChoreDefinition).where(ChoreDefinition.id == instance.definition_id)
     )
@@ -327,43 +344,134 @@ async def complete_chore_instance(
     if definition is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Chore definition no longer exists; cannot determine points",
+            detail="Chore definition no longer exists",
         )
+    return definition
 
-    points_awarded = EFFORT_POINTS[definition.effort_level]
+
+async def _resolve_assignee_name(
+    db: AsyncSession, assignee_id: Optional[uuid.UUID]
+) -> Optional[str]:
+    """Display name for the instance's assignee, or None when unassigned."""
+    if assignee_id is None:
+        return None
+    user_result = await db.execute(select(User).where(User.id == assignee_id))
+    user = user_result.scalar_one_or_none()
+    return user.display_name if user is not None else None
+
+
+@router.post(
+    "/{instance_id}/complete",
+    response_model=ChoreInstanceResponse,
+)
+async def complete_chore_instance(
+    household_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _membership: HouseholdMembership = Depends(require_household_member),
+) -> ChoreInstanceResponse:
+    """Mark a ChoreInstance as complete, award points, and record a PointLedger entry.
+
+    The assignee may complete their own instance; an admin may complete any
+    instance **on the assignee's behalf** — points are always credited to the
+    assignee, never the admin. Attempting to complete an already-terminal
+    instance returns HTTP 409.
+
+    Edge case: if ``assignee_id`` is NULL (member removed after assignment),
+    the instance is completed without a PointLedger row and ``points_awarded``
+    stays NULL (the ``PointLedger.user_id`` FK is non-nullable).
+    """
+    instance = await _load_instance_for_terminal_transition(
+        db,
+        household_id,
+        instance_id,
+        current_user=current_user,
+        membership=_membership,
+        forbidden_detail="Only the assigned user may complete this chore",
+        terminal_verb="completed",
+    )
+
+    definition = await _definition_or_422(db, instance)
+
     now = datetime.now(timezone.utc)
-
-    # Update the instance within the same transaction.
     instance.status = "complete"
     instance.completed_at = now
-    instance.points_awarded = points_awarded
 
-    # Insert a PointLedger record.
-    ledger_entry = PointLedger(
-        household_id=household_id,
-        user_id=current_user.id,
-        chore_instance_id=instance_id,
-        points=points_awarded,
-        awarded_at=now,
-    )
-    db.add(ledger_entry)
-    logger.info(
-        "chore.completed",
-        chore_instance_id=str(instance_id),
-        user_id=str(current_user.id),
-        points=points_awarded,
-    )
-
-    # Resolve assignee display name for the response.
-    assignee_name: Optional[str] = None
     if instance.assignee_id is not None:
-        user_result = await db.execute(
-            select(User).where(User.id == instance.assignee_id)
+        points_awarded = EFFORT_POINTS[definition.effort_level]
+        instance.points_awarded = points_awarded
+        ledger_entry = PointLedger(
+            household_id=household_id,
+            user_id=instance.assignee_id,
+            chore_instance_id=instance_id,
+            points=points_awarded,
+            awarded_at=now,
         )
-        assignee = user_result.scalar_one_or_none()
-        if assignee is not None:
-            assignee_name = assignee.display_name
+        db.add(ledger_entry)
+        logger.info(
+            "chore.completed",
+            chore_instance_id=str(instance_id),
+            user_id=str(instance.assignee_id),
+            points=points_awarded,
+        )
+    else:
+        # Assignee removed after assignment — close the instance without
+        # awarding points (PointLedger.user_id is non-nullable).
+        instance.points_awarded = None
+        logger.info(
+            "chore.completed_without_assignee",
+            chore_instance_id=str(instance_id),
+            household_id=str(household_id),
+        )
 
+    assignee_name = await _resolve_assignee_name(db, instance.assignee_id)
+    return _instance_response_from_row(instance, definition, assignee_name)
+
+
+@router.post(
+    "/{instance_id}/dismiss",
+    response_model=ChoreInstanceResponse,
+)
+async def dismiss_chore_instance(
+    household_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _membership: HouseholdMembership = Depends(require_household_member),
+) -> ChoreInstanceResponse:
+    """Close a ChoreInstance as done WITHOUT awarding points.
+
+    Distinct from ``complete`` (awards points) and ``cancelled`` (series
+    deleted): dismissing records that the task was closed but earns the
+    assignee zero points — no PointLedger row is created. The assignee may
+    dismiss their own instance; an admin may dismiss any instance on the
+    assignee's behalf.
+    """
+    instance = await _load_instance_for_terminal_transition(
+        db,
+        household_id,
+        instance_id,
+        current_user=current_user,
+        membership=_membership,
+        forbidden_detail="Only the assigned user may dismiss this chore",
+        terminal_verb="dismissed",
+    )
+
+    definition = await _definition_or_422(db, instance)
+
+    now = datetime.now(timezone.utc)
+    instance.status = "dismissed"
+    instance.completed_at = now
+    instance.points_awarded = None
+    logger.info(
+        "chore.dismissed",
+        chore_instance_id=str(instance_id),
+        household_id=str(household_id),
+        user_id=str(current_user.id),
+    )
+
+    assignee_name = await _resolve_assignee_name(db, instance.assignee_id)
     return _instance_response_from_row(instance, definition, assignee_name)
 
 
