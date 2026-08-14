@@ -3625,3 +3625,201 @@ new widget tests; a dismissed task never awards points anywhere in the UI; an
 admin can complete any pending/overdue task on the assignee's behalf and the
 assignee is credited on the leaderboard.
 
+---
+
+## TASK-106: Backend — chore-template endpoints (list suggestions + hide)
+
+**Domain**: Backend — chores API / data model
+**Depends on**: none (TASK-107's UI depends on this)
+**Branch**: `feat/chore-templates` (shared with TASK-107)
+
+**What & why**: When creating a chore, an admin wants to start from a previous
+task and copy its title, description, category and **score**. In this app
+"score" IS the effort level — easy = 10, medium = 25, hard = 50 points
+(`EFFORT_POINTS` in `app/core/constants.py`; `effortLevels` in
+`flutter_app/lib/core/constants/chore_constants.dart`) — so copying
+`effort_level` copies the score. Suggestions are the household's active
+`ChoreDefinition`s. "Remove from suggestions" must NOT delete the chore or hide
+it from the chore list — it only hides the definition from the create-form
+template list, so a boolean flag on the definition is the right shape.
+
+**How to implement** (backend):
+
+1. `backend/app/models/chore_definition.py` — add a column next to `is_active`:
+   ```python
+   hidden_from_suggestions: Mapped[bool] = mapped_column(
+       Boolean, nullable=False, default=False, server_default=sa.text("false")
+   )
+   ```
+   (`Boolean` is already imported; add `import sqlalchemy as sa` or import
+   `text` from sqlalchemy.) No new model → `app/models/__init__.py` unchanged.
+
+2. New Alembic migration (mirror `d4e5f6a7b8c9_add_dismissed_chore_status.py`
+   for style; `down_revision` = current head):
+   ```python
+   op.add_column(
+       "chore_definitions",
+       sa.Column("hidden_from_suggestions", sa.Boolean(),
+                 nullable=False, server_default=sa.text("false")),
+   )
+   ```
+   Downgrade drops the column.
+
+3. `backend/app/schemas/chore.py` — add a response schema:
+   ```python
+   class ChoreTemplateResponse(BaseModel):
+       model_config = ConfigDict(from_attributes=True)
+       id: uuid.UUID
+       title: str
+       description: Optional[str]
+       category: str
+       effort_level: str
+   ```
+
+4. `backend/app/api/chores.py` — two endpoints. **IMPORTANT:** declare
+   `GET /templates` ABOVE the existing `GET /{instance_id}` route — FastAPI
+   matches routes in declaration order and `/{instance_id}` expects a UUID, so
+   a literal `/templates` declared after it would 422. Both endpoints are
+   admin-gated (create is admin-only, so only admins consume templates):
+   ```python
+   @router.get("/templates", response_model=list[ChoreTemplateResponse])
+   async def list_chore_templates(
+       household_id: uuid.UUID,
+       db: AsyncSession = Depends(get_db),
+       _membership: HouseholdMembership = Depends(require_admin),
+   ) -> list[ChoreTemplateResponse]:
+       """Active chore definitions usable as create-form templates, newest first."""
+       result = await db.execute(
+           select(ChoreDefinition)
+           .where(
+               ChoreDefinition.household_id == household_id,
+               ChoreDefinition.is_active.is_(True),
+               ChoreDefinition.hidden_from_suggestions.is_(False),
+           )
+           .order_by(ChoreDefinition.created_at.desc())
+       )
+       return [ChoreTemplateResponse.model_validate(d) for d in result.scalars()]
+   ```
+   (`created_at` exists via `TimestampMixin` on `ChoreDefinition`.)
+   ```python
+   @router.post("/{definition_id}/hide", status_code=status.HTTP_204_NO_CONTENT)
+   async def hide_chore_template(
+       household_id: uuid.UUID,
+       definition_id: uuid.UUID,
+       db: AsyncSession = Depends(get_db),
+       _membership: HouseholdMembership = Depends(require_admin),
+   ) -> None:
+       """Stop showing a definition as a create-form template (admin only)."""
+       definition = (
+           await db.execute(
+               select(ChoreDefinition).where(
+                   ChoreDefinition.id == definition_id,
+                   ChoreDefinition.household_id == household_id,
+                   ChoreDefinition.is_active.is_(True),
+               )
+           )
+       ).scalar_one_or_none()
+       if definition is None:
+           raise HTTPException(
+               status_code=status.HTTP_404_NOT_FOUND,
+               detail="Chore definition not found",
+           )
+       definition.hidden_from_suggestions = True
+   ```
+   (`status`, `select`, `HTTPException` are already imported; the router prefix
+   is `/households/{household_id}/chores`.)
+
+5. Tests — new `backend/tests/test_templates.py` (mirror `test_completion.py`'s
+   self-contained `async_client` + seed helpers):
+   - admin GET `/templates` → 200, active definitions ordered newest-first,
+     each carrying title/description/category/effort_level.
+   - a hidden definition is excluded from templates but STILL returns its
+     instances in `GET /chores` — proves hiding ≠ deleting.
+   - admin POST `/{definition_id}/hide` → 204; a follow-up GET excludes it.
+   - hide a non-existent definition → 404.
+   - non-admin GET `/templates` → 403 and POST `hide` → 403.
+
+**Acceptance criteria**: `alembic upgrade head` applies cleanly;
+`uv run pytest tests/ -v` and `uv run ruff check .` pass with no coverage
+regression (both endpoints are exercised by the new tests).
+
+---
+
+## TASK-107: Flutter — template picker on the create screen + hide a suggestion
+
+**Domain**: Flutter frontend — chores create UI
+**Depends on**: TASK-106 (endpoints must exist)
+**Branch**: `feat/chore-templates`
+
+**What & why**: Surface "start from a previous task" on the create screen.
+Tapping a suggestion copies ONLY title / description / category / effort_level
+("score") into the form — the due date, chore type, recurrence and assignee are
+left for the admin to set fresh. A remove affordance hides that suggestion via
+the backend `hide` endpoint.
+
+**How to implement** (frontend):
+
+1. `lib/core/api/api_endpoints.dart` — add:
+   ```dart
+   static String choreTemplates(String hId) => '/households/$hId/chores/templates';
+   static String choreHideTemplate(String hId, String defId) =>
+       '/households/$hId/chores/$defId/hide';
+   ```
+
+2. New model `lib/features/chores/models/chore_template.dart`:
+   ```dart
+   class ChoreTemplate {
+     const ChoreTemplate({required this.id, required this.title,
+       this.description, required this.category, required this.effortLevel});
+     final String id; final String title; final String? description;
+     final String category; final String effortLevel;
+     factory ChoreTemplate.fromJson(Map<String, dynamic> j) => ChoreTemplate(
+       id: j['id'] as String,
+       title: j['title'] as String,
+       description: j['description'] as String?,
+       category: j['category'] as String,
+       effortLevel: j['effort_level'] as String,
+     );
+   }
+   ```
+
+3. New provider `lib/features/chores/providers/chore_templates_provider.dart`:
+   `AsyncNotifierProvider.family<List<ChoreTemplate>, String>` keyed on
+   householdId that GETs `choreTemplates(hId)`. Add
+   `Future<void> hideTemplate(String definitionId)` — POST `choreHideTemplate`,
+   then update `state` DIRECTLY by filtering the id out (the TASK-092 pattern:
+   `state = state.whenData((list) => list.where((t) => t.id != id).toList())`).
+   Do NOT `invalidateSelf()` after a mutation; keep `invalidateSelf` only in
+   `refresh()`. On failure, rethrow so the screen can show
+   `friendlyErrorMessage`.
+
+4. `lib/features/chores/screens/create_chore_screen.dart` — in CREATE mode only
+   (NOT edit mode), render a "Start from a previous task" section at the TOP of
+   the form (above the title field). `ref.watch(choreTemplatesProvider(widget.householdId))`:
+   - loading → nothing (or a small spinner); error → nothing (suggestions are
+     optional and must never block create);
+   - data → a horizontal list of tappable suggestion chips/cards showing
+     `title`, category label + icon, and the effort label + points
+     (e.g. "Medium · 25 pts", from `chore_constants.dart` `effortLevels` and
+     `categoryIcons`/`categoryLabels`).
+   - Tap a suggestion → `setState` and copy into the form: `_titleController.text`,
+     `_descriptionController.text = description ?? ''`, `_category`,
+     `_effortLevel`. Leave `_choreType`, `_firstDueDate`, the recurrence fields,
+     and `_assigneeId` untouched.
+   - Each suggestion has a remove affordance (small X icon button, or
+     long-press) that calls `hideTemplate(id)`. Keys: `Key('template_<id>')`
+     for the suggestion and `Key('remove_template_<id>')` for its remove
+     affordance.
+
+5. Widget tests — extend `test/features/chores/create_chore_screen_test.dart`
+   (override `choreTemplatesProvider` with a fake notifier; see the
+   fake-notifier pattern in `my_chores_screen_test.dart`): tapping a suggestion
+   prefills title/description/category/effort (assert via the field keys /
+   controller text); the remove affordance calls hide and drops the suggestion;
+   the section is absent in edit mode.
+
+**Acceptance criteria**: `flutter analyze --no-pub --no-fatal-infos` clean;
+`flutter test --no-pub` green including the new tests; selecting a template
+copies exactly title/description/category/effort_level and nothing else;
+removing a suggestion hides it from the list without affecting the chore list.
+---
