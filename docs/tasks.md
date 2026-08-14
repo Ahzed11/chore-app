@@ -8,11 +8,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**107 tasks complete, 0 pending.** Completed task bodies
+**107 tasks complete, 1 pending (TASK-108).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
-tasks here as TASK-108+ following the same format (self-contained body,
+tasks here as TASK-109+ following the same format (self-contained body,
 acceptance criteria, ledger row).
 
 ---
@@ -143,3 +143,95 @@ closed without a keystore (TASK-099).
   message naming the offending APK/version and the expected cert.
 
 ---
+
+---
+
+## TASK-108: Flutter — "Copy from existing task" picker in the create form
+
+**Domain**: Flutter frontend — chores create UI
+**Depends on**: TASK-106 (backend `/templates` endpoint, already shipped)
+**Branch**: `feat/copy-from-existing-task`
+
+**What & why**: The admin wants to explicitly **select an existing task to copy
+from, inside the task-creation form**, then edit from there. Selecting a task
+copies exactly **title / description / category / effort level ("score")** into
+the form; the due date, chore type, recurrence and assignee are left for the
+admin to set fresh. This **replaces** the passive "Start from a previous task"
+auto-suggestion strip from TASK-107 — the interaction should be user-initiated:
+tap a control, pick a task from a list, fields populate. (No backend work; the
+TASK-106 `GET /templates` endpoint already returns the definitions.)
+
+**How to implement** (frontend only):
+
+1. Keep `lib/features/chores/providers/chore_templates_provider.dart` as the
+   data source — it already fetches `choreTemplates(hId)` and returns
+   `List<ChoreTemplate>`. The `hideTemplate` method is no longer surfaced by
+   this UI; leave it (harmless, and reusable if a future "hide from copy list"
+   is wanted) or delete it — implementer's choice, but don't leave dead widget
+   code referencing it.
+
+2. `lib/features/chores/screens/create_chore_screen.dart`:
+   - **Remove** the TASK-107 widgets `_TemplateSuggestionsSection` and
+     `_TemplateCard`, and their inline usage in the build (the
+     `if (!_isEditMode) ...[ ... _TemplateSuggestionsSection ... ]` block).
+   - In the same spot (create mode only, above the Title field), add an
+     explicit control — an `OutlinedButton.icon` with
+     `key: const Key('copy_from_task_button')`,
+     `icon: Icon(Icons.content_copy)`, label `Copy from existing task`. Give it
+     a short helper line underneath only if it reads better; keep it one
+     tappable control.
+   - Tapping it opens a modal bottom sheet that returns the chosen template
+     (use `showModalBottomSheet<ChoreTemplate>(...)` — the exact pattern used in
+     `grocery_list_screen.dart:92` and `chore_card.dart:285`):
+     ```dart
+     Future<void> _pickTemplateToCopy() async {
+       final templates = ref.read(choreTemplatesProvider(widget.householdId)).valueOrNull ?? const <ChoreTemplate>[];
+       if (templates.isEmpty) {
+         // show a brief SnackBar: "No existing tasks to copy yet."
+         return;
+       }
+       final chosen = await showModalBottomSheet<ChoreTemplate>(
+         context: context,
+         isScrollControlled: true,
+         builder: (_) => _CopyTaskSheet(templates: templates),
+       );
+       if (chosen != null && mounted) {
+         setState(() {
+           _titleController.text = chosen.title;
+           _descriptionController.text = chosen.description ?? '';
+           _category = chosen.category;
+           _effortLevel = chosen.effortLevel;
+         });
+       }
+     }
+     ```
+   - Add `_CopyTaskSheet`, a `ConsumerWidget`/`StatelessWidget` that renders a
+     `ListView` of the templates in a `DraggableScrollableSheet` or a capped
+     `SizedBox` (height ~ `min(60% screen, items * 72)`). Each row is a
+     `ListTile` with `key: Key('copy_task_<id>')`, `leading` = category icon
+     (coloured via `categoryIcons`/`categoryColors` from
+     `chore_constants.dart`), `title` = task title, `subtitle` =
+     `categoryLabel · effort label (points)` (e.g. `Kitchen · Medium · 25 pts`),
+     `onTap: () => Navigator.pop(context, template)`. Use
+     `SafeArea` + a `Padding` for the bottom inset. A header row "Copy from" is
+     optional. Preserve the category label/icon/colour mapping that
+     `_TemplateCard` already used.
+
+3. **No backend changes** — `choreTemplatesProvider` and the TASK-106
+   endpoint are reused as-is.
+
+**Acceptance criteria**: `flutter analyze --no-pub --no-fatal-infos` clean;
+`flutter test --no-pub` green with new widget tests that (a) the button is
+present in create mode and absent in edit mode, (b) tapping it shows the sheet
+with the existing tasks, (c) selecting a task copies exactly
+title/description/category/effort_level into the form and closes the sheet, and
+(d) an empty task list does not open the sheet (shows the "no existing tasks"
+snackbar instead). Existing TASK-107 widget tests for the removed
+auto-suggestion strip are deleted/updated.
+
+**Open decision (flag to user)**: the original request also said "remove a
+previous task from the suggestions." With the explicit picker there is no
+"suggestion" list — it lists the household's real tasks. If hiding specific
+tasks from the copy-list is still wanted, reuse the existing TASK-106
+`POST .../hide` endpoint and add a small hide affordance on each sheet row —
+out of scope here unless requested.
