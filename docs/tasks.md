@@ -8,11 +8,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**108 tasks complete, 0 pending.** Completed task bodies
+**108 tasks complete, 2 pending (TASK-109 … TASK-110).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
-tasks here as TASK-109+ following the same format (self-contained body,
+tasks here as TASK-111+ following the same format (self-contained body,
 acceptance criteria, ledger row).
 
 ---
@@ -146,3 +146,154 @@ closed without a keystore (TASK-099).
 ---
 
 ---
+
+---
+
+## TASK-109: Fix the broken "Copy from existing task" control on the create form
+
+**Domain**: Flutter frontend — chores create UI
+**Depends on**: TASK-108 (the control this fixes)
+**Branch**: `fix/copy-from-existing-task`
+
+**What & why**: The "Copy from existing task" control added in TASK-108 is
+reported broken/unusable in the real app. Reproduce, fix, and prove it with
+tests that exercise the paths the current tests miss.
+
+**Current code** (in `flutter_app/lib/features/chores/screens/create_chore_screen.dart`):
+- `_pickTemplateToCopy()` — awaits `choreTemplatesProvider(hId).future`, then
+  shows a snackbar on empty/error, else opens the sheet and copies the 4 fields.
+- `_CopyTaskSheet` — `SafeArea > Padding > Column(mainAxisSize: min) > [
+  header, subtitle, Flexible(child: ListView.separated(shrinkWrap: true, …)) ]`.
+
+**Investigate, in this order** (don't assume — reproduce first):
+
+1. **Bottom-sheet layout is the prime suspect.** `Flexible` inside a
+   `Column(mainAxisSize: MainAxisSize.min)` with a `shrinkWrap: true` ListView
+   is fragile: on real devices and/or with several tasks it can throw
+   `RenderFlex children have non-zero flex but incoming height constraints are
+   unbounded`, or overflow past the screen. The existing widget test only
+   pumped **one** task, so it never exercised this. A red error screen (or the
+   sheet silently not opening) is exactly "broken and unusable".
+2. **`_pickTemplateToCopy` future handling** — confirm the provider future
+   resolves (not hangs) and that the error path shows `friendlyErrorMessage`
+   rather than an unhandled exception.
+3. Confirm `/templates` returns data for the household (TASK-106 tests cover
+   the backend; a 403/422 here would surface as the error snackbar).
+
+**Fix (canonical, robust pattern):**
+
+- Replace the sheet body with a `DraggableScrollableSheet` and a plain
+  (non-`shrinkWrap`) `ListView` driven by its controller — the standard
+  bottom-sheet-list pattern, no `Flexible`-in-`min`-Column, no `shrinkWrap`:
+  ```dart
+  final chosen = await showModalBottomSheet<ChoreTemplate>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.5,
+      minChildSize: 0.25,
+      maxChildSize: 0.85,
+      builder: (context, scrollController) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // fixed header ("Copy from existing task" + subtitle), padded
+          Expanded(
+            child: ListView.separated(
+              controller: scrollController,
+              itemCount: templates.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) => _CopyTaskRow(template: templates[i]),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+  ```
+  Keep `_CopyTaskRow` (ListTile with `Key('copy_task_<id>')`, category icon,
+  title, `cat · effort · pts` subtitle, `onTap: () => Navigator.pop(context, template)`).
+- Keep the empty-list snackbar and the `friendlyErrorMessage` snackbar in
+  `_pickTemplateToCopy()` unchanged (they are correct).
+
+**Tests — REQUIRED (these catch the bug):**
+
+- Open the sheet with **~15 tasks**: assert `tester.takeException()` is null
+  after `pumpAndSettle`, scroll to the last row, tap it, and assert the fields
+  copied (title/description/category/effort_level).
+- 1 task (existing test, keep), empty → snackbar no sheet (keep), error →
+  `friendlyErrorMessage` snackbar (add: fake notifier whose `build` throws).
+- Button present in create mode / absent in edit mode (keep).
+
+**Acceptance criteria**: `flutter analyze --no-pub --no-fatal-infos` clean;
+`flutter test --no-pub` green including the 15-task overflow/scroll test; the
+sheet opens and scrolls on a real device without any layout exception (verify
+via TASK-110's harness once available).
+
+---
+
+## TASK-110: Autonomous end-to-end app testing harness (find + fix issues)
+
+**Domain**: QA / test infrastructure (Flutter + backend)
+**Depends on**: none (independent of TASK-109; its harness is what catches the TASK-109 class of bug)
+**Branch**: `feat/e2e-testing-harness`
+
+**What & why**: We need a repeatable, headless way for an agent to run the REAL
+app (not just unit/widget tests) and surface runtime/UI bugs — layout
+exceptions, overflow, broken flows — then fix them. The copy-control bug slipped
+through because the widget test used a single data point. Build two layers, in
+cost order.
+
+**Layer 1 — layout/overflow sweep (widget tests, no new system deps):**
+A smoke harness that pumps each screen/flow with empty / one / many data
+variants and asserts `expect(tester.takeException(), isNull)` after
+`pumpAndSettle()`. This is the cheapest detector for the class of bug we just
+hit. Add `flutter_app/test/features/_layout_smoke_test.dart` (or extend the
+existing per-screen tests) that iterates: households list, chore list
+(empty/one/many, each status), create-chore form (incl. opening the
+copy-from-existing-task sheet with many tasks), my-chores screen, leaderboard,
+groceries list. Each variant asserts no uncaught exception. Document that any
+`RenderFlex overflow`/`unbounded height` caught here is a real bug to fix.
+
+**Layer 2 — `integration_test` on the Linux desktop device (true E2E):**
+Only the `android/` platform folder exists and the Linux desktop toolchain is
+missing, so add it:
+1. `sudo dnf install -y cmake ninja-build clang gtk3-devel pkg-config`
+   (`flutter doctor` confirms; sudo password is in the user's memory notes).
+2. From `flutter_app/`: `flutter create --platforms=linux .` (adds `linux/`).
+3. Add dev dependency: `integration_test: {sdk: flutter}` to `pubspec.yaml`.
+4. Start the backend: podman container `choreapp-db` (postgres, 5432), then
+   `cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000` with the
+   usual `DATABASE_URL`/`JWT_SECRET` env (see the repo's test README / TASK-001
+   notes). Run the app's migrations (`uv run alembic upgrade head`).
+5. Write `integration_test/app_flows_test.dart` using
+   `IntegrationTestWidgetsFlutterBinding.ensureInitialized()`, covering the full
+   journey: register → create household → create a chore → **copy from existing
+   task** (select a previous task, assert the 4 fields prefilled) → dismiss →
+   complete → leaderboard points → logout. Use `--dart-define` to point the app
+   at the local server:
+   ```
+   flutter test integration_test/app_flows_test.dart -d linux \
+     --dart-define=API_BASE_URL=http://localhost:8000
+   ```
+   (`AppConfig.baseUrl` reads `API_BASE_URL`; default is the Android-emulator
+   `10.0.2.2:8000`.) On a headless box wrap with `xvfb-run -a …`.
+6. (Optional alternative, lower priority) Flutter web + browser automation:
+   `flutter create --platforms=web .`, then
+   `flutter run -d web-server --web-port 8080 --web-renderer html
+   --dart-define=API_BASE_URL=http://localhost:8000` and drive it with the
+   browser / computer_use tools. Note CanvasKit (default) renders to a canvas
+   with no DOM, so use `--web-renderer html` for DOM-driven automation.
+
+**Agent workflow**: run the Layer-1 sweep → record failures → fix → re-run →
+run the Layer-2 E2E flow → record any failures → fix → re-run. Log every found
+issue and its fix as a ledger entry (TASK-1xx), archiving bodies as usual. The
+first concrete target: reproduce and confirm the TASK-109 copy-control fix
+through BOTH layers.
+
+**Acceptance criteria**: Layer-1 sweep runs headlessly and fails on a
+deliberately-introduced overflow (sanity check that it can catch bugs); Layer-2
+E2E flow passes end-to-end against a live local backend; both are documented in
+a `docs/testing.md` (commands + how to add a flow) so any future agent can run
+them without guidance.
