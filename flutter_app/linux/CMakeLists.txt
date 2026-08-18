@@ -44,6 +44,13 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_options(${TARGET} PRIVATE -Wall -Werror)
   target_compile_options(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O3>")
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
+  # Clang 16+ warns on the legacy literal-operator declarations in the
+  # flutter_secure_storage_linux plugin's bundled nlohmann/json.hpp
+  # (`-Wdeprecated-literal-operator`); with -Werror above that fails the
+  # build. Suppress it for Clang only — GCC does not know the flag.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(${TARGET} PRIVATE -Wno-deprecated-literal-operator)
+  endif()
 endfunction()
 
 # Flutter library and tool build rules.
