@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/config/app_locale.dart';
 import 'router/app_router.dart';
 import 'shared/theme/app_theme.dart';
 
@@ -29,6 +30,12 @@ class ChoreApp extends ConsumerWidget {
       theme: AppTheme.lightTheme,
       routerConfig: router,
       debugShowCheckedModeBanner: false,
+      // TASK-115: pin en_GB so every calendar widget starts the week on
+      // MONDAY (en_GB has firstDayOfWeekIndex == 1; the unset default
+      // inherits the device locale, and en_US starts on Sunday).
+      localizationsDelegates: kLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
+      locale: kAppLocale,
     );
   }
 }
