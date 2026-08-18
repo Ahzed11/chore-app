@@ -8,11 +8,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**112 tasks complete, 2 pending (TASK-109, TASK-111).** Completed task bodies
+**114 tasks complete, 0 pending.** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
-tasks here as TASK-111+ following the same format (self-contained body,
+tasks here as TASK-115+ following the same format (self-contained body,
 acceptance criteria, ledger row).
 
 ---
@@ -62,6 +62,8 @@ acceptance criteria, ledger row).
 | TASK-112 | ✅ Done 2026-08-18 — category dropdown RenderFlex overflow on narrow screens / large text (create form): `isExpanded: true` + Flexible ellipsizing item text; narrow/large-text variant added to the Layer-1 sweep (fails without the fix) — archived. |
 | TASK-113 | ✅ Done 2026-08-18 — backend connection-pool hygiene after the "register 201 → login 401" incident: `pool_recycle=1800`, dedicated pytest DB `choreapp_test_db` (tests drop/recreate the schema per session), docs record the "never pytest a live DB" rule. ⚠️ TASK-113's original "stale pool" diagnosis was superseded by TASK-114 — the real cause was the FastAPI yield-teardown commit racing the client's auto-login — archived. |
 | TASK-114 | ✅ Done 2026-08-18 — register→login race fixed: FastAPI runs `yield`-dependency teardown (get_db's commit) AFTER the response is sent, so a client acting immediately on a write response can race the commit. Explicit `await db.commit()` before returning in auth register, create household, create chore (the endpoints whose 201s trigger immediate client follow-ups); convention documented in session.py + docs/testing.md. Verified: 15/15 rapid register→login cycles green, suite 253 @ 97.4%, E2E journey green — archived. |
+| TASK-109 | ✅ Done 2026-08-18 — "Copy from existing task" sheet hardened to the canonical DraggableScrollableSheet pattern (initial 0.5 / min 0.2 / max 0.85, non-shrinkWrap ListView, header as first list item, bottom safe-area inset, unfocus before open). Harness found no repro of the reported breakage, so the planned hardening was applied + an adversarial review (REQUEST CHANGES) drove a second round: all task-required tests added (15-template tap-last-row-copy, throwing-provider friendlyErrorMessage snackbar, half-height-panel + landscape/large-text sweep variants). Suite 246 green at merge; E2E green — archived. |
+| TASK-111 | ✅ Done 2026-08-18 — chore lists sort newest-first: backend `list_chores` ORDER BY `(created_at DESC, id DESC)` (id keeps offset pagination deterministic on ties); `created_at` added to `ChoreInstanceResponse`; Flutter `ChoreModel.createdAt` + optimistic paths; My Chores pending sorts createdAt DESC with id tiebreaker (overdue pinned, Done unchanged); All Chores preserves server order. Deterministic backdate-based backend tests (+ rowcount guard); All Chores/My Chores ordering widget tests (distinct createdAt fixtures); E2E asserts newest chore on top. Adversarial review APPROVE — actionable findings applied. Suite 254 @ 97.4% + Flutter 248 green; pubspec 1.0.6+10006; fdroid index rebuilt after merge — archived. |
 
 ---
 
@@ -148,189 +150,3 @@ closed without a keystore (TASK-099).
   message naming the offending APK/version and the expected cert.
 
 ---
-
----
-
----
-
-## TASK-109: Fix the broken "Copy from existing task" control on the create form
-
-**Domain**: Flutter frontend — chores create UI
-**Depends on**: TASK-108 (the control this fixes)
-**Branch**: `fix/copy-from-existing-task`
-
-**What & why**: The "Copy from existing task" control added in TASK-108 is
-reported broken/unusable in the real app. Reproduce, fix, and prove it with
-tests that exercise the paths the current tests miss.
-
-**Current code** (in `flutter_app/lib/features/chores/screens/create_chore_screen.dart`):
-- `_pickTemplateToCopy()` — awaits `choreTemplatesProvider(hId).future`, then
-  shows a snackbar on empty/error, else opens the sheet and copies the 4 fields.
-- `_CopyTaskSheet` — `SafeArea > Padding > Column(mainAxisSize: min) > [
-  header, subtitle, Flexible(child: ListView.separated(shrinkWrap: true, …)) ]`.
-
-**Investigate, in this order** (don't assume — reproduce first):
-
-1. **Bottom-sheet layout is the prime suspect.** `Flexible` inside a
-   `Column(mainAxisSize: MainAxisSize.min)` with a `shrinkWrap: true` ListView
-   is fragile: on real devices and/or with several tasks it can throw
-   `RenderFlex children have non-zero flex but incoming height constraints are
-   unbounded`, or overflow past the screen. The existing widget test only
-   pumped **one** task, so it never exercised this. A red error screen (or the
-   sheet silently not opening) is exactly "broken and unusable".
-2. **`_pickTemplateToCopy` future handling** — confirm the provider future
-   resolves (not hangs) and that the error path shows `friendlyErrorMessage`
-   rather than an unhandled exception.
-3. Confirm `/templates` returns data for the household (TASK-106 tests cover
-   the backend; a 403/422 here would surface as the error snackbar).
-
-**Fix (canonical, robust pattern):**
-
-- Replace the sheet body with a `DraggableScrollableSheet` and a plain
-  (non-`shrinkWrap`) `ListView` driven by its controller — the standard
-  bottom-sheet-list pattern, no `Flexible`-in-`min`-Column, no `shrinkWrap`:
-  ```dart
-  final chosen = await showModalBottomSheet<ChoreTemplate>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    builder: (_) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.5,
-      minChildSize: 0.25,
-      maxChildSize: 0.85,
-      builder: (context, scrollController) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // fixed header ("Copy from existing task" + subtitle), padded
-          Expanded(
-            child: ListView.separated(
-              controller: scrollController,
-              itemCount: templates.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) => _CopyTaskRow(template: templates[i]),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-  ```
-  Keep `_CopyTaskRow` (ListTile with `Key('copy_task_<id>')`, category icon,
-  title, `cat · effort · pts` subtitle, `onTap: () => Navigator.pop(context, template)`).
-- Keep the empty-list snackbar and the `friendlyErrorMessage` snackbar in
-  `_pickTemplateToCopy()` unchanged (they are correct).
-
-**Tests — REQUIRED (these catch the bug):**
-
-- Open the sheet with **~15 tasks**: assert `tester.takeException()` is null
-  after `pumpAndSettle`, scroll to the last row, tap it, and assert the fields
-  copied (title/description/category/effort_level).
-- 1 task (existing test, keep), empty → snackbar no sheet (keep), error →
-  `friendlyErrorMessage` snackbar (add: fake notifier whose `build` throws).
-- Button present in create mode / absent in edit mode (keep).
-
-**Acceptance criteria**: `flutter analyze --no-pub --no-fatal-infos` clean;
-`flutter test --no-pub` green including the 15-task overflow/scroll test; the
-sheet opens and scrolls on a real device without any layout exception (verify
-via TASK-110's harness once available).
-
-**Status update 2026-08-18 (TASK-110)**: the harness could NOT reproduce a
-layout failure in the current sheet — the Layer-1 sweep opens it with 15+
-templates at phone sizes, scrolls to the last row, and asserts zero exceptions,
-and the Layer-2 E2E exercises the full copy flow (select a row, assert the 4
-fields prefilled) against a live backend; both pass. If the control is still
-reported broken on a real device, apply the `DraggableScrollableSheet` fix
-below as hardening — otherwise this task can be closed as no-repro.
-
----
-
-## TASK-111: Sort chore lists newest-first — new tasks on top, oldest at the bottom
-
-**Domain**: Backend API + Flutter frontend — chore list ordering
-**Depends on**: none (supersedes the ordering introduced by TASK-070; TASK-071's
-`test_list_chores_pagination_is_stable` must be updated, see Tests below)
-**Branch**: `feat/newest-tasks-first`
-
-**What & why**: User report (2026-08-18): tasks appear in the wrong order —
-oldest on top, newest at the bottom. Desired: the newest-created task at the top
-of every list and the oldest at the bottom, with ONE exception — in My Chores
-the overdue chores stay pinned on top (urgency beats age). "Newest" means
-creation time (`created_at` of the chore instance), the same convention the
-templates endpoint already uses (TASK-106: `ChoreDefinition.created_at.desc()`).
-User decision recorded: "Both lists, but My Chores keeps overdue tasks pinned on
-top, everything else newest-first."
-
-**Current behaviour**:
-- `backend/app/api/chores.py` — `list_chores` orders by
-  `ChoreInstance.due_date, ChoreInstance.id` (ascending): the soonest-due task
-  sits on top; a newly created task with a later due date lands at the bottom.
-  All four All-Chores filter tabs (All/Pending/Overdue/Done) inherit this order
-  because the frontend preserves server order.
-- `ChoreInstanceResponse` (`backend/app/schemas/chore.py`) does not expose
-  `created_at`, and `ChoreModel` (Flutter) has no `createdAt` — the client
-  cannot sort by creation today.
-- `flutter_app/lib/features/chores/screens/my_chores_screen.dart` re-sorts
-  locally: overdue by `dueDate` ASC, pending by `dueDate` ASC (so newest tasks
-  sink to the bottom), done by `completedAt` DESC (already newest-first — keep).
-
-**Changes**:
-
-1. Backend — `backend/app/api/chores.py` `list_chores` (~line 218): change the
-   ORDER BY to `ChoreInstance.created_at.desc(), ChoreInstance.id.desc()`.
-   `id` DESC keeps offset pagination deterministic when `created_at` ties
-   (UUIDs are unique) — never order by `created_at` alone. Do NOT "fix" this
-   back to due-date order: the user explicitly wants creation order. Consequence
-   to accept: future instances of recurring chores (generated by the scheduler)
-   sort to the top of All Chores — that is the requested behaviour.
-2. Backend — schema: add `created_at: datetime` to `ChoreInstanceResponse`
-   (`backend/app/schemas/chore.py`) and populate it in
-   `_instance_response_from_row` (`created_at=instance.created_at`). The field
-   then also flows into the create/complete/dismiss responses — harmless,
-   `from_attributes` covers it.
-3. Flutter — `flutter_app/lib/features/chores/models/chore_model.dart`: add
-   `required DateTime createdAt`; parse `json['created_at']` in `fromJson`
-   (server always sends it once step 2 lands) and emit it in `toJson`.
-4. Flutter — `flutter_app/lib/features/chores/providers/chores_provider.dart`:
-   the two optimistic `ChoreModel(...)` constructions in `completeChore` and
-   `dismissChore` must pass `createdAt: c.createdAt`. Any other construction
-   sites the analyzer flags likewise.
-5. Flutter — `my_chores_screen.dart`:
-   - overdue: keep `dueDate` ASC (pinned block, most-overdue first).
-   - pending: sort by `createdAt` DESC (newest first) instead of `dueDate` ASC.
-   - done: unchanged (`completedAt` DESC — most recently completed first is
-     already "newest on top").
-   - `chore_list_screen.dart` needs NO change — the server order flows through
-     `_applyFilter` unchanged.
-6. Tests:
-   - Backend: `test_list_chores_pagination_is_stable`
-     (`backend/tests/test_chores.py` ~line 707) asserts due dates are ascending
-     and WILL FAIL — rewrite it for the new order. Pitfall: Postgres
-     `func.now()` is transaction time, so consecutive creates can tie on
-     `created_at`; the `id DESC` tiebreaker is random UUIDs → flaky. Make it
-     deterministic by backdating `created_at` directly in the DB via
-     `_get_session_factory()` (e.g. `UPDATE chore_instances SET created_at =
-     now() - make_interval(days => n)` per chore), then assert: pages disjoint,
-     cover all rows, `created_at` non-increasing across the concatenated pages,
-     and `created_at` present in every item. Add a focused newest-first test:
-     3 chores created in sequence → titles come back reversed (newest first)
-     with descending `created_at`.
-   - Flutter: update fixtures that build `ChoreModel` (fromJson maps need
-     `created_at`); add widget tests for (a) All Chores list shows newest-created
-     first and (b) My Chores todo shows overdue on top, then pending
-     newest-first. `flutter analyze --no-pub --no-fatal-infos` must stay clean
-     (it flags missed construction sites).
-7. Release (standing rule): bump `flutter_app/pubspec.yaml` version patch →
-   next `1.0.6+10006` (verify current version at merge time; a duplicate tag
-   makes CI skip the release). After merge to main, dispatch the fdroid index
-   rebuild: `python3 ~/.hermes/scripts/fdroid_dispatch.py`.
-
-**Acceptance criteria**:
-- `GET /households/{id}/chores` returns items newest-created first, each item
-  carries `created_at`; pagination pages stay disjoint and cover all rows.
-- All Chores tab (every filter) shows the newest task at the top.
-- My Chores todo: overdue pinned on top, then pending newest-first; Done tab
-  unchanged.
-- Backend suite + Flutter suite green; analyzer clean with zero infos; new
-  ordering tests added (not just existing ones updated).
-- pubspec bumped to 1.0.6+10006 and the fdroid index rebuilt after merge.
