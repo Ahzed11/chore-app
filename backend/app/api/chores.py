@@ -153,6 +153,11 @@ async def create_chore(
 
     first_instance_resp = _instance_response_from_row(instance, definition, assignee_name)
 
+    # COMMIT EXPLICITLY (TASK-114): get_db's teardown commit runs after the
+    # response is sent; the app refetches the chore list the moment it gets
+    # this 201, so an uncommitted row would race the refetch. Commit first.
+    await db.commit()
+
     return ChoreDefinitionResponse(
         id=definition.id,
         household_id=definition.household_id,

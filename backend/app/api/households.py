@@ -46,6 +46,10 @@ async def create_household(
     db.add(membership)
     await db.flush()
     await db.refresh(household)
+    # COMMIT EXPLICITLY (TASK-114): get_db's teardown commit runs after the
+    # response is sent; the app refetches the household list on receiving this
+    # 201 and would race an uncommitted row. Commit first.
+    await db.commit()
 
     return HouseholdResponse(
         id=household.id,

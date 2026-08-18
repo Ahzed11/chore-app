@@ -100,15 +100,16 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8000 &
 curl -s http://localhost:8000/health   # expect {"status":"ok"}
 ```
 
-Two hard rules for the backend server (TASK-113, learned the hard way):
+Two hard rules for the backend server (learned the hard way, TASK-113/114):
 
-1. **Start the server fresh for every E2E run.** A long-lived uvicorn can
-   develop stale pooled-connection state when client connections are
-   interrupted mid-request (aborted E2E runs are prime culprits) — symptoms:
-   register succeeds (201) but the immediately-following login returns 401
-   "Invalid credentials", and the user CAN log in minutes later. Restarting
-   uvicorn clears it. `pool_recycle=1800` (in `app/db/session.py`) bounds the
-   blast radius.
+1. **Write endpoints whose responses trigger immediate client follow-ups must
+   commit EXPLICITLY before returning.** FastAPI runs `yield`-dependency
+   teardown (get_db's commit) AFTER the response is sent — the client can
+   receive a 201/200 and act on it (auto-login, list refetch) before the row
+   is committed. That was the real cause of the intermittent "register 201 →
+   login 401": the app's auto-login raced the commit. Fixed in auth register,
+   create household, and create chore (see TASK-114) — keep the convention.
+   `pool_recycle=1800` in `app/db/session.py` is hygiene only.
 2. **Never run pytest against the same database a live server uses.** The
    suite drops and recreates the schema per session on `TEST_DATABASE_URL` —
    pointing that at the dev DB corrupts the server's pool. Use the dedicated

@@ -69,6 +69,12 @@ async def register(
     db.add(user)
     await db.flush()   # populate user.id and server-side defaults without committing
     await db.refresh(user)
+    # COMMIT EXPLICITLY: FastAPI runs yield-dependency teardown (get_db's
+    # commit) AFTER the response is sent, so a client that acts immediately
+    # on this 201 — the app's auto-login — can race the commit and get a 401
+    # (user not yet visible). Commit before returning so the row is durable
+    # before the response leaves the server. See TASK-114.
+    await db.commit()
     return user
 
 

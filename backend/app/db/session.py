@@ -12,14 +12,14 @@ async_engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    # Recycle pooled connections every 30 minutes. Observed 2026-08-18
-    # (TASK-113): after ~15 min of uptime a long-lived uvicorn started
-    # returning EMPTY results for every SELECT while INSERTs still worked
-    # (register 201 → login 401, duplicate-check SELECTs saw no rows) — a
-    # fresh process behaved correctly. Root cause not fully pinned (no DB
-    # errors, code proven correct in-process); recycling bounds the blast
-    # radius of any such stale-connection state. If login starts returning
-    # "Invalid credentials" while the DB is fine, restart uvicorn.
+    # Hygiene for long-lived processes: recycle pooled connections every 30
+    # minutes. NOTE — the 2026-08-18 "register 201 → login 401" incident was
+    # NOT a pool issue: FastAPI runs yield-dependency teardown (the commit
+    # below) AFTER the response is sent, so a client acting immediately on a
+    # write response can race the commit. Write endpoints whose responses
+    # trigger immediate client follow-ups commit EXPLICITLY before returning
+    # (TASK-114: auth register, create household, create chore). Keep that
+    # convention for new write endpoints.
     pool_recycle=1800,
 )
 

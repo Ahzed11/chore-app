@@ -4049,3 +4049,39 @@ the server's pool mid-flight.
 **Acceptance criteria**: backend suite 253 passed @ 97.4% with
 `TEST_DATABASE_URL` on the dedicated DB; E2E journey passes against a fresh
 server; docs record both rules.
+
+---
+
+## TASK-114: Register→login race — commit explicitly before responding
+
+**Domain**: Backend — transaction/response ordering (supersedes TASK-113's diagnosis)
+**Depends on**: none (root-caused while verifying TASK-110's E2E harness)
+**Branch**: `fix/commit-before-respond`
+
+**What & why**: The intermittent "register 201 → login 401" was NOT a pool
+issue. Root cause: **FastAPI runs `yield`-dependency teardown AFTER the
+response is sent** — `get_db`'s `await session.commit()` therefore executed
+after the client already received the 201. The app fires its auto-login the
+instant it gets the register response, so the login's SELECT could land inside
+the ~16ms window before the commit finished and see the user as not-yet-committed
+(user-is-None → 401 "Invalid credentials"), while the same user logged in fine
+seconds later. Proven with an instrumented in-process uvicorn + real HTTP
+client: the client received the 201 *before* the `commit finished` log line.
+The same latent race exists for every write endpoint whose response triggers an
+immediate client follow-up (list refetches).
+
+**Fix**: explicit `await db.commit()` before returning in the endpoints whose
+responses the client acts on immediately:
+- `POST /auth/register` — auto-login follows the 201.
+- `POST /households` — the app refetches the household list on the 201.
+- `POST /households/{id}/chores` — the app refetches the chore list on the 201.
+
+`get_db`'s teardown commit remains as a post-response safety net (a no-op after
+an explicit commit). The convention is documented in `app/db/session.py` and
+`docs/testing.md` so future write endpoints commit explicitly too.
+
+**Verification**: 15/15 rapid register→login cycles green on the fixed server
+(the pattern that previously produced intermittent 401s); backend suite 253
+passed @ 97.4% + ruff clean; full E2E journey (register → household → chore →
+copy → dismiss → complete → leaderboard → logout) green against the live
+backend.
