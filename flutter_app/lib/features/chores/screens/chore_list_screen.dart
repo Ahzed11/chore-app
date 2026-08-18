@@ -53,7 +53,7 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   // ---------------------------------------------------------------------------
 
   List<ChoreModel> _applyFilter(List<ChoreModel> chores) {
-    return chores.where((c) {
+    final filtered = chores.where((c) {
       if (c.status == 'cancelled') return false;
       switch (_activeFilter) {
         case 'pending':
@@ -66,6 +66,30 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
           return true;
       }
     }).toList();
+
+    // TASK-116: the All tab pins overdue chores on top — same overdue
+    // definition as My Chores (status == 'overdue' OR pending past due) and
+    // the same block ordering: overdue by dueDate ASC (most-overdue first),
+    // everything else newest-created first (createdAt DESC + id tiebreaker,
+    // the TASK-111 server convention). The other tabs keep server order.
+    // (The check is case-insensitive — _ChoreFilterTabs always passes the
+    // lowercase label, so a capitalized value would be dead-defensive.)
+    if (_activeFilter.toLowerCase() == 'all') {
+      filtered.sort((a, b) {
+        final aOverdue = a.isOverdue ? 0 : 1;
+        final bOverdue = b.isOverdue ? 0 : 1;
+        if (aOverdue != bOverdue) return aOverdue - bOverdue;
+        if (aOverdue == 0) {
+          // Most-overdue first; id DESC breaks same-dueDate ties so the
+          // block order is deterministic (List.sort is unstable).
+          final byDue = a.dueDate.compareTo(b.dueDate);
+          return byDue != 0 ? byDue : b.id.compareTo(a.id);
+        }
+        final byCreated = b.createdAt.compareTo(a.createdAt);
+        return byCreated != 0 ? byCreated : b.id.compareTo(a.id);
+      });
+    }
+    return filtered;
   }
 
   // ---------------------------------------------------------------------------
