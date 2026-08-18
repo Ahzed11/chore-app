@@ -419,6 +419,11 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
               DropdownButtonFormField<String>(
                 key: const Key('category_dropdown'),
                 initialValue: _category,
+                // TASK-112: without isExpanded the button's internal
+                // IndexedStack sizes to the widest item and overflows the
+                // field on narrow screens / large text scales
+                // ("RenderFlex overflowed by N pixels on the right").
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Category *'),
                 items: categoryLabels.entries.map((entry) {
                   return DropdownMenuItem<String>(
@@ -427,7 +432,17 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
                       children: [
                         Icon(categoryIcons[entry.key], size: 18),
                         const SizedBox(width: 10),
-                        Text(entry.value),
+                        // Flexible + ellipsis lets long labels shrink to the
+                        // field width instead of overflowing (the open menu
+                        // constrains items to the button width too, so this
+                        // is safe there as well).
+                        Flexible(
+                          child: Text(
+                            entry.value,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ],
                     ),
                   );
