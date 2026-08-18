@@ -8,11 +8,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**114 tasks complete, 0 pending.** Completed task bodies
+**114 tasks complete, 1 pending (TASK-115).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
-tasks here as TASK-115+ following the same format (self-contained body,
+tasks here as TASK-116+ following the same format (self-contained body,
 acceptance criteria, ledger row).
 
 ---
@@ -148,5 +148,78 @@ closed without a keystore (TASK-099).
 - The guard exits 1 (no push) on each of: a tampered index `signer`, a wrong
   `signing_cert.sha256` value, and a malformed pin — each with an actionable
   message naming the offending APK/version and the expected cert.
+
+---
+
+## TASK-115: Calendar/date-picker widgets always start the week on Monday
+
+**Domain**: Flutter frontend — date picker / calendar weekday order
+**Depends on**: none
+**Branch**: `fix/monday-first-week`
+
+**What & why**: User requirement (2026-08-18): the calendar must ALWAYS show
+Monday as the first day of the week. Currently it starts on Sunday (US
+convention). Applies to every calendar widget, present and future.
+
+**Current behaviour**:
+- The ONLY calendar in the app is the due-date picker:
+  `showDatePicker(...)` at `flutter_app/lib/features/chores/screens/create_chore_screen.dart:156`
+  (`_pickDate`, used by BOTH the create and edit modes of the chore form —
+  there is no separate edit screen). No other calendar widgets exist
+  (no `CalendarDatePicker`, no third-party calendar package in `lib/`).
+- `MaterialApp` (`flutter_app/lib/main.dart:27-32`) sets NO `locale`,
+  `localizationsDelegates`, or `supportedLocales` — the picker inherits the
+  device locale; on en_US (the effective default) Flutter's
+  `MaterialLocalizations.firstDayOfWeekIndex == 0`, so the calendar grid
+  starts on Sunday.
+- `flutter_localizations` is NOT in `pubspec.yaml` (only `intl` is).
+
+**Fix (app-level default so EVERY calendar inherits it — "always" by
+construction, not per-call)**:
+1. Add the SDK dependency to `pubspec.yaml`:
+   `flutter_localizations: {sdk: flutter}` (plus `flutter pub get`).
+2. In `main.dart`'s `MaterialApp` add:
+   - `localizationsDelegates: GlobalMaterialLocalizations.delegates`
+   - `supportedLocales: [Locale('en', 'GB')]` (keep any existing)
+   - `locale: const Locale('en', 'GB')` — en_GB has
+     `firstDayOfWeekIndex == 1` (Monday), which forces a Monday-first grid.
+3. Verify no collateral from the locale change: the app is English-only and
+   formats dates with explicit `DateFormat` patterns
+   (e.g. `DateFormat('EEE, d MMM yyyy')` in `_pickDate`), so the ambient
+   locale change is cosmetic (weekday order, not text). If a reviewer finds
+   an undesired formatting change, the minimal fallback is passing
+   `locale: const Locale('en', 'GB')` to the `showDatePicker` call instead —
+   but prefer the app-level default (the delegates are required either way,
+   and the app-level default also covers any FUTURE calendar widget).
+4. Do NOT add per-picker hacks elsewhere; future calendars inherit the
+   app-level default.
+
+**Tests (REQUIRED)**:
+- New widget test (e.g. in `test/features/chores/create_chore_screen_test.dart`):
+  pump the create-chore screen, tap `due_date_field`, and assert the opened
+  date picker's weekday header row starts with MONDAY (first column shows
+  Monday's abbreviation — `MaterialLocalizations.formatShortWeekday` on the
+  first day; assert the first header cell, not just that a dialog opened).
+  The same test must also pass for the edit-mode path (same screen with
+  `initData`).
+- Existing picker interactions stay green:
+  `test/features/chores/chore_edit_test.dart:319-325` (tap field — tap OK)
+  and the E2E due-date flow (`integration_test/app_flows_test.dart`, taps
+  `due_date_field` — OK in two places) — the Monday-first grid must not
+  break the OK-tap flow.
+- `flutter analyze --no-pub --no-fatal-infos` clean; full suite green.
+
+**Release (standing rule)**: bump `flutter_app/pubspec.yaml` version patch —
+next `1.0.7+10007` (verify current version at merge time; a duplicate tag
+makes CI skip the release). After merge to main, dispatch the fdroid index
+rebuild: `python3 ~/.hermes/scripts/fdroid_dispatch.py`.
+
+**Acceptance criteria**:
+- The due-date picker's calendar (create AND edit modes) shows Monday as the
+  first day of the week, asserted by a widget test on the weekday header row.
+- The app-level locale default is in place so any future calendar widget is
+  Monday-first without extra work.
+- Analyzer clean, full Flutter suite green, E2E journey green.
+- pubspec bumped to 1.0.7+10007 and the fdroid index rebuilt after merge.
 
 ---
