@@ -204,6 +204,7 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
     final chosen = await showModalBottomSheet<ChoreTemplate>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       builder: (_) => _CopyTaskSheet(templates: templates),
     );
 
@@ -798,40 +799,53 @@ class _CopyTaskSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Copy from existing task',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+    // Canonical bottom-sheet list (TASK-109): DraggableScrollableSheet with a
+    // plain, non-shrinkWrap ListView driven by its controller. The previous
+    // Flexible-inside-min-Column + shrinkWrap ListView was fragile — with
+    // enough tasks it could hit "RenderFlex children have non-zero flex but
+    // incoming height constraints are unbounded" or overflow the screen.
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.5,
+      minChildSize: 0.25,
+      maxChildSize: 0.85,
+      builder: (context, scrollController) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Copy from existing task',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Select a task — title, description, category and score are copied.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Select a task — title, description, category and score are copied.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.grey.shade600,
-              ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.separated(
+              controller: scrollController,
+              itemCount: templates.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final template = templates[index];
+                return _CopyTaskRow(template: template);
+              },
             ),
-            const SizedBox(height: 12),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: templates.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final template = templates[index];
-                  return _CopyTaskRow(template: template);
-                },
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
