@@ -94,6 +94,15 @@ class _FakeChoreTemplatesNotifier extends ChoreTemplatesNotifier {
   Future<void> hideTemplate(String definitionId) async {}
 }
 
+/// Templates provider whose build throws — drives the
+/// `friendlyErrorMessage` snackbar path in `_pickTemplateToCopy`
+/// (required by TASK-109's test list; previously untested).
+class _ThrowingTemplatesNotifier extends ChoreTemplatesNotifier {
+  @override
+  Future<List<ChoreTemplate>> build(String arg) async =>
+      throw Exception('boom');
+}
+
 ChoreTemplate _template({
   String id = 't1',
   String title = 'Vacuum',
@@ -709,6 +718,108 @@ void main() {
           ),
         );
         expect(selector.selected, contains('hard'));
+      });
+
+      testWidgets(
+          'with 15 templates: scrolls to the LAST row, taps it, and the '
+          '4 fields are copied (TASK-109)', (tester) async {
+        // Phone-ish viewport (400x800): the sheet opens at 50% height, which
+        // cannot fit 15 rows — scrolling to the last row is genuinely
+        // required, and the old Flexible+shrinkWrap sheet would have filled
+        // the whole screen here instead.
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final templates = [
+          for (var i = 1; i <= 15; i++)
+            _template(
+              id: 't$i',
+              title: 'Template task $i',
+              description: 'Description $i',
+              category: i.isEven ? 'living_room' : 'kitchen',
+              effortLevel: i.isEven ? 'hard' : 'easy',
+            ),
+        ];
+        await tester.pumpWidget(_buildScreen(templates: templates));
+        await tester.pump();
+        await tester.pump();
+
+        await tester.ensureVisible(
+          find.byKey(const Key('copy_from_task_button')),
+        );
+        await tester.tap(find.byKey(const Key('copy_from_task_button')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // The sheet is a draggable half-height panel, NOT full-screen (the
+        // old sheet expanded to full height with many templates).
+        final sheetHeight =
+            tester.getSize(find.byType(BottomSheet)).height;
+        final screenHeight =
+            tester.view.physicalSize.height / tester.view.devicePixelRatio;
+        expect(sheetHeight, lessThan(screenHeight));
+
+        // The last row starts below the fold — scrolling is required.
+        expect(find.byKey(const Key('copy_task_t15')), findsNothing);
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('copy_task_t15')),
+          200,
+          scrollable: find.byType(Scrollable).last,
+        );
+        expect(tester.takeException(), isNull);
+
+        // Tap the last row and assert all 4 fields copied.
+        await tester.tap(find.byKey(const Key('copy_task_t15')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('title_field')),
+            matching: find.text('Template task 15'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('description_field')),
+            matching: find.text('Description 15'),
+          ),
+          findsOneWidget,
+        );
+        // Template 15 is odd → kitchen + easy.
+        expect(find.text('Kitchen'), findsWidgets);
+        final selector = tester.widget<SegmentedButton<String>>(
+          find.descendant(
+            of: find.byKey(const Key('effort_level_selector')),
+            matching: find.byType(SegmentedButton<String>),
+          ),
+        );
+        expect(selector.selected, contains('easy'));
+      });
+
+      testWidgets('templates provider error → friendlyErrorMessage snackbar',
+          (tester) async {
+        _expandView(tester);
+        await tester.pumpWidget(
+          _buildScreen(
+            templatesFactory: () => _ThrowingTemplatesNotifier(),
+          ),
+        );
+        await tester.pump();
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('copy_from_task_button')));
+        await tester.pumpAndSettle();
+
+        // Non-DioException errors map to the generic friendly message
+        // (friendly_error.dart); the raw exception must never leak.
+        expect(
+          find.text('Something went wrong. Please try again.'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('copy_task_t1')), findsNothing);
       });
     });
   });

@@ -201,9 +201,15 @@ class _CreateChoreScreenState extends ConsumerState<CreateChoreScreen> {
       return;
     }
 
+    // Dismiss the keyboard first (TASK-109, adversarial review): with the
+    // keyboard up, the sheet would open at 50% of the reduced height and the
+    // first rows would be hidden behind it.
+    FocusManager.instance.primaryFocus?.unfocus();
+
     final chosen = await showModalBottomSheet<ChoreTemplate>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       builder: (_) => _CopyTaskSheet(templates: templates),
     );
 
@@ -798,40 +804,57 @@ class _CopyTaskSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Copy from existing task',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Select a task — title, description, category and score are copied.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.grey.shade600,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: templates.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final template = templates[index];
-                  return _CopyTaskRow(template: template);
-                },
-              ),
-            ),
-          ],
+    // Canonical bottom-sheet list (TASK-109): DraggableScrollableSheet with a
+    // plain, non-shrinkWrap ListView driven by its controller. The previous
+    // Flexible-inside-min-Column + shrinkWrap ListView was fragile — with
+    // enough tasks it could hit "RenderFlex children have non-zero flex but
+    // incoming height constraints are unbounded" or overflow the screen.
+    //
+    // The header is the list's FIRST ITEM rather than a fixed widget above
+    // the scrollable: a fixed header would overflow the sheet when dragged to
+    // minChildSize on short/landscape screens with large text (adversarial
+    // review 2026-08-18). The modal's useSafeArea covers top/left/right; the
+    // list's bottom padding covers the home-indicator / nav-bar inset.
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.5,
+      minChildSize: 0.2,
+      maxChildSize: 0.85,
+      builder: (context, scrollController) => ListView.separated(
+        controller: scrollController,
+        padding: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          12 + MediaQuery.paddingOf(context).bottom,
         ),
+        itemCount: templates.length + 1,
+        separatorBuilder: (context, index) => index == 0
+            ? const SizedBox(height: 12)
+            : const Divider(height: 1),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Copy from existing task',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Select a task — title, description, category and score are copied.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            );
+          }
+          return _CopyTaskRow(template: templates[index - 1]);
+        },
       ),
     );
   }
