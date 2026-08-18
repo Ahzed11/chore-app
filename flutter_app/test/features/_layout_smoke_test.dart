@@ -412,6 +412,67 @@ void main() {
           scrollable: find.byType(Scrollable).last,
         );
         expect(tester.takeException(), isNull);
+        // The sheet is a draggable half-height panel, NOT full-screen (the
+        // pre-TASK-109 sheet expanded to full height with many templates —
+        // the user-visible defect this task was about).
+        final sheetHeight = tester.getSize(find.byType(BottomSheet)).height;
+        final screenHeight =
+            tester.view.physicalSize.height / tester.view.devicePixelRatio;
+        expect(sheetHeight, lessThan(screenHeight));
+      });
+
+      testWidgets(
+          'copy sheet survives LANDSCAPE + LARGE TEXT (TASK-109 '
+          'adversarial review: fixed header overflow at minChildSize)',
+          (tester) async {
+        // Short landscape surface with textScale 2.0: the sheet dragged to
+        // minChildSize is ~72px tall — smaller than a fixed header would be.
+        // The header scrolls with the list, so no overflow can occur.
+        tester.view.physicalSize = const Size(640 * 2, 360 * 2);
+        tester.view.devicePixelRatio = 2.0;
+        tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(
+          tester.platformDispatcher.clearTextScaleFactorTestValue,
+        );
+
+        final templates = [for (var i = 1; i <= 10; i++) _template(i)];
+        await _pumpAndExpectClean(tester, form(templates: templates));
+
+        // Drag-scroll the (very tall at textScale 2.0) form to the copy
+        // button — drag-based scrolling ends with the button fully in view,
+        // unlike ensureVisible which can leave it at the viewport edge and
+        // make the tap miss.
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('copy_from_task_button')),
+          100,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('copy_from_task_button')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        // The sheet must actually be open.
+        expect(find.byType(BottomSheet), findsOneWidget);
+        expect(
+          find.text('Copy from existing task'),
+          findsNWidgets(2),
+          reason: 'form button + sheet header',
+        );
+
+        // Drag the sheet's header down — the sheet collapses toward
+        // minChildSize (the danger zone for a fixed header) — then back up
+        // to max. At every extent the single scrollable must lay out
+        // cleanly (the header scrolls with the list, so nothing overflows).
+        final sheetHeader = find.text('Copy from existing task').last;
+        await tester.drag(sheetHeader, const Offset(0, 300));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        await tester.drag(sheetHeader, const Offset(0, -300));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
       });
     });
 
