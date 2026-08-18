@@ -8,11 +8,11 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**115 tasks complete, 0 pending.** Completed task bodies
+**115 tasks complete, 1 pending (TASK-116).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
-tasks here as TASK-116+ following the same format (self-contained body,
+tasks here as TASK-117+ following the same format (self-contained body,
 acceptance criteria, ledger row).
 
 ---
@@ -149,5 +149,77 @@ closed without a keystore (TASK-099).
 - The guard exits 1 (no push) on each of: a tampered index `signer`, a wrong
   `signing_cert.sha256` value, and a malformed pin — each with an actionable
   message naming the offending APK/version and the expected cert.
+
+---
+
+## TASK-116: All Chores — All tab pins overdue tasks on top
+
+**Domain**: Flutter frontend — All Chores list ordering
+**Depends on**: TASK-111 (createdAt on ChoreModel + the newest-first convention)
+**Branch**: `feat/all-chores-overdue-pinned`
+
+**What & why**: User request (2026-08-18): in the All Chores screen's ALL tab,
+overdue tasks must stay pinned at the top of the list. Today the All tab
+preserves the server order (`created_at DESC` — newest first, TASK-111), so an
+overdue chore created long ago sinks to the bottom and is easy to miss. My
+Chores already pins overdue on top (TASK-111 decision); All Chores should do
+the same in its All tab.
+
+**Current behaviour**:
+- `flutter_app/lib/features/chores/screens/chore_list_screen.dart`
+  `_applyFilter` (line 55): the All tab (`default` branch) returns every
+  non-cancelled chore in SERVER order — no client-side re-sort.
+- The other tabs (Pending / Overdue / Done) filter by status and keep server
+  order.
+
+**Changes (client-side sort, All tab only)**:
+- In `_applyFilter`, when `_activeFilter == 'All'`, sort the filtered list:
+  1. Overdue chores first, using the SAME overdue definition as My Chores:
+     `ChoreModel.isOverdue` (status == 'overdue' OR pending with a due date
+     before today — the client-side safety net, so a pending chore whose due
+     date passed is pinned too).
+  2. Within the overdue block: `dueDate` ASC (most-overdue first — matches
+     the My Chores overdue block).
+  3. Everything else: `createdAt` DESC with an `id` tiebreaker (the
+     TASK-111 server convention, so All-tab non-overdue order stays
+     newest-first and stable).
+- Do NOT change the Pending / Overdue / Done tabs (they keep server order),
+  and do NOT change the backend (its `created_at DESC, id DESC` stays the
+  pagination order; the All tab re-sorts in memory like My Chores already
+  does).
+- Accepted limitation (same as My Chores): the client re-sort can split an
+  overdue group across the 100-per-page fetch boundary in very large
+  households. The server order remains the pagination order.
+
+**Tests (REQUIRED)**:
+- Widget test (`test/features/chores/chore_list_screen_test.dart`): All tab
+  with a SCRAMBLED provider list containing overdue + pending + done chores
+  asserts: overdue block on top (most-overdue first by dueDate ASC), then
+  pending newest-first (createdAt DESC), then done; Y-coordinate assertions,
+  not vacuous.
+- Update the existing TASK-111 test 'renders chores in provider order —
+  newest-created first': its claim "without re-sorting" no longer holds for
+  the All tab. Rename/update it to reflect the new contract: with NO overdue
+  chores, the All tab shows newest-created first (still asserts createdAt
+  DESC rendering); the overdue-pinning behaviour is covered by the new test.
+- Existing Pending/Overdue/Done tab tests stay green (they must be
+  untouched by the sort).
+- Note: the E2E cannot create an overdue chore through the UI (the date
+  picker enforces `firstDate: today`), so overdue pinning is covered by
+  widget tests only; the E2E's newest-first assertion (both chores pending)
+  must stay green.
+
+**Release (standing rule)**: bump `flutter_app/pubspec.yaml` version patch —
+next `1.0.8+10008` (verify current version at merge time; a duplicate tag
+makes CI skip the release). After merge to main, dispatch the fdroid index
+rebuild: `python3 ~/.hermes/scripts/fdroid_dispatch.py`.
+
+**Acceptance criteria**:
+- All Chores All tab: overdue tasks (by the same isOverdue definition as My
+  Chores) render at the top, most-overdue first; the rest newest-first.
+- Pending / Overdue / Done tabs unchanged.
+- Analyzer clean, full Flutter suite green (new + updated widget tests), E2E
+  journey green.
+- pubspec bumped to 1.0.8+10008 and the fdroid index rebuilt after merge.
 
 ---
