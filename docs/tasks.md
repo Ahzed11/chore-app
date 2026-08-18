@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**114 tasks complete, 1 pending (TASK-115).** Completed task bodies
+**115 tasks complete, 0 pending.** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
@@ -64,6 +64,7 @@ acceptance criteria, ledger row).
 | TASK-114 | ✅ Done 2026-08-18 — register→login race fixed: FastAPI runs `yield`-dependency teardown (get_db's commit) AFTER the response is sent, so a client acting immediately on a write response can race the commit. Explicit `await db.commit()` before returning in auth register, create household, create chore (the endpoints whose 201s trigger immediate client follow-ups); convention documented in session.py + docs/testing.md. Verified: 15/15 rapid register→login cycles green, suite 253 @ 97.4%, E2E journey green — archived. |
 | TASK-109 | ✅ Done 2026-08-18 — "Copy from existing task" sheet hardened to the canonical DraggableScrollableSheet pattern (initial 0.5 / min 0.2 / max 0.85, non-shrinkWrap ListView, header as first list item, bottom safe-area inset, unfocus before open). Harness found no repro of the reported breakage, so the planned hardening was applied + an adversarial review (REQUEST CHANGES) drove a second round: all task-required tests added (15-template tap-last-row-copy, throwing-provider friendlyErrorMessage snackbar, half-height-panel + landscape/large-text sweep variants). Suite 246 green at merge; E2E green — archived. |
 | TASK-111 | ✅ Done 2026-08-18 — chore lists sort newest-first: backend `list_chores` ORDER BY `(created_at DESC, id DESC)` (id keeps offset pagination deterministic on ties); `created_at` added to `ChoreInstanceResponse`; Flutter `ChoreModel.createdAt` + optimistic paths; My Chores pending sorts createdAt DESC with id tiebreaker (overdue pinned, Done unchanged); All Chores preserves server order. Deterministic backdate-based backend tests (+ rowcount guard); All Chores/My Chores ordering widget tests (distinct createdAt fixtures); E2E asserts newest chore on top. Adversarial review APPROVE — actionable findings applied. Suite 254 @ 97.4% + Flutter 248 green; pubspec 1.0.6+10006; fdroid index rebuilt after merge — archived. |
+| TASK-115 | ✅ Done 2026-08-18 — calendar widgets always start the week on Monday: MaterialApp pins en_GB (firstDayOfWeekIndex == 1) via shared locale constants (`lib/core/config/app_locale.dart`) used by both the app and tests; `flutter_localizations` added, `intl` → ^0.20.2. Widget tests assert the picker's weekday header starts M T W T F S S (create + edit; sanity-verified to fail under en_US) and the real ChoreApp's MaterialApp carries the pinned locale. Adversarial review APPROVE — 3 of 4 findings applied (seam test, comment accuracy, import scope; header-brittleness already guarded). Suite 250 green, analyzer clean, E2E green; pubspec 1.0.7+10007; fdroid index rebuilt after merge — archived. |
 
 ---
 
@@ -148,78 +149,5 @@ closed without a keystore (TASK-099).
 - The guard exits 1 (no push) on each of: a tampered index `signer`, a wrong
   `signing_cert.sha256` value, and a malformed pin — each with an actionable
   message naming the offending APK/version and the expected cert.
-
----
-
-## TASK-115: Calendar/date-picker widgets always start the week on Monday
-
-**Domain**: Flutter frontend — date picker / calendar weekday order
-**Depends on**: none
-**Branch**: `fix/monday-first-week`
-
-**What & why**: User requirement (2026-08-18): the calendar must ALWAYS show
-Monday as the first day of the week. Currently it starts on Sunday (US
-convention). Applies to every calendar widget, present and future.
-
-**Current behaviour**:
-- The ONLY calendar in the app is the due-date picker:
-  `showDatePicker(...)` at `flutter_app/lib/features/chores/screens/create_chore_screen.dart:156`
-  (`_pickDate`, used by BOTH the create and edit modes of the chore form —
-  there is no separate edit screen). No other calendar widgets exist
-  (no `CalendarDatePicker`, no third-party calendar package in `lib/`).
-- `MaterialApp` (`flutter_app/lib/main.dart:27-32`) sets NO `locale`,
-  `localizationsDelegates`, or `supportedLocales` — the picker inherits the
-  device locale; on en_US (the effective default) Flutter's
-  `MaterialLocalizations.firstDayOfWeekIndex == 0`, so the calendar grid
-  starts on Sunday.
-- `flutter_localizations` is NOT in `pubspec.yaml` (only `intl` is).
-
-**Fix (app-level default so EVERY calendar inherits it — "always" by
-construction, not per-call)**:
-1. Add the SDK dependency to `pubspec.yaml`:
-   `flutter_localizations: {sdk: flutter}` (plus `flutter pub get`).
-2. In `main.dart`'s `MaterialApp` add:
-   - `localizationsDelegates: GlobalMaterialLocalizations.delegates`
-   - `supportedLocales: [Locale('en', 'GB')]` (keep any existing)
-   - `locale: const Locale('en', 'GB')` — en_GB has
-     `firstDayOfWeekIndex == 1` (Monday), which forces a Monday-first grid.
-3. Verify no collateral from the locale change: the app is English-only and
-   formats dates with explicit `DateFormat` patterns
-   (e.g. `DateFormat('EEE, d MMM yyyy')` in `_pickDate`), so the ambient
-   locale change is cosmetic (weekday order, not text). If a reviewer finds
-   an undesired formatting change, the minimal fallback is passing
-   `locale: const Locale('en', 'GB')` to the `showDatePicker` call instead —
-   but prefer the app-level default (the delegates are required either way,
-   and the app-level default also covers any FUTURE calendar widget).
-4. Do NOT add per-picker hacks elsewhere; future calendars inherit the
-   app-level default.
-
-**Tests (REQUIRED)**:
-- New widget test (e.g. in `test/features/chores/create_chore_screen_test.dart`):
-  pump the create-chore screen, tap `due_date_field`, and assert the opened
-  date picker's weekday header row starts with MONDAY (first column shows
-  Monday's abbreviation — `MaterialLocalizations.formatShortWeekday` on the
-  first day; assert the first header cell, not just that a dialog opened).
-  The same test must also pass for the edit-mode path (same screen with
-  `initData`).
-- Existing picker interactions stay green:
-  `test/features/chores/chore_edit_test.dart:319-325` (tap field — tap OK)
-  and the E2E due-date flow (`integration_test/app_flows_test.dart`, taps
-  `due_date_field` — OK in two places) — the Monday-first grid must not
-  break the OK-tap flow.
-- `flutter analyze --no-pub --no-fatal-infos` clean; full suite green.
-
-**Release (standing rule)**: bump `flutter_app/pubspec.yaml` version patch —
-next `1.0.7+10007` (verify current version at merge time; a duplicate tag
-makes CI skip the release). After merge to main, dispatch the fdroid index
-rebuild: `python3 ~/.hermes/scripts/fdroid_dispatch.py`.
-
-**Acceptance criteria**:
-- The due-date picker's calendar (create AND edit modes) shows Monday as the
-  first day of the week, asserted by a widget test on the weekday header row.
-- The app-level locale default is in place so any future calendar widget is
-  Monday-first without extra work.
-- Analyzer clean, full Flutter suite green, E2E journey green.
-- pubspec bumped to 1.0.7+10007 and the fdroid index rebuilt after merge.
 
 ---

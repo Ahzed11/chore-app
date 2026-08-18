@@ -4187,3 +4187,58 @@ unchanged; backend suite 254 @ 97.4% + Flutter 248 green, analyzer clean;
 adversarial review (fresh agent) approved with non-blocking findings, all
 actionable ones applied; E2E journey green; pubspec bumped and fdroid index
 rebuilt after merge.
+
+---
+
+## TASK-115: Calendar/date-picker widgets always start the week on Monday
+
+**Domain**: Flutter frontend — date picker / calendar weekday order
+**Depends on**: none
+**Branch**: `fix/monday-first-week`
+
+**What & why**: User requirement (2026-08-18): the calendar must ALWAYS show
+Monday as the first day of the week. Currently it starts on Sunday (US
+convention). Applies to every calendar widget, present and future.
+
+**Fix applied**:
+- `pubspec.yaml`: added `flutter_localizations: {sdk: flutter}`; `intl`
+  bumped ^0.19.0 → ^0.20.2 (the SDK pins intl 0.20.2); version bumped to
+  1.0.7+10007.
+- NEW `lib/core/config/app_locale.dart`: shared constants `kAppLocale`
+  (en_GB), `kSupportedLocales`, `kLocalizationsDelegates` — the single
+  source of truth used by BOTH main.dart and the tests (a test can never
+  drift from the app config). en_GB has `firstDayOfWeekIndex == 1` →
+  Monday-first calendar.
+- `main.dart`: MaterialApp.router now sets localizationsDelegates /
+  supportedLocales / locale from those constants. The app is English-only
+  and formats dates with explicit DateFormat patterns, so the only
+  user-visible changes are the calendar weekday order and the picker
+  dialog's own day-first date order (e.g. "Tue 18 Aug" vs "Tue, Aug 18").
+- The app-level default covers any FUTURE calendar widget too.
+
+**Tests**:
+- `create_chore_screen_test.dart`: 'date picker weekday order (TASK-115)'
+  group — create-mode and edit-mode tests open the due-date picker and
+  assert the weekday header row is `['M','T','W','T','F','S','S']`
+  (single-letter narrow headers in the pinned SDK; Sunday-first would be
+  `['S','M','T','W','T','F','S']`). Sanity-verified to FAIL under a real
+  en_US locale. The `hasLength(7)` check scoped to DatePickerDialog makes it
+  non-vacuous (fails if the dialog never opens) and fails loudly if the SDK
+  ever renders extra single-letter texts.
+- `widget_test.dart`: the real ChoreApp's MaterialApp must carry the pinned
+  locale + supportedLocales — guards the main.dart wiring itself.
+- The screen-test MaterialApp mirrors the app's locale via the shared
+  constants.
+
+**Adversarial review (2026-08-18)**: APPROVE — no bugs; verified the
+Monday-first mechanism against the SDK source (`_DayHeaders` narrow
+weekdays from `firstDayOfWeekIndex`), confirmed no DateFormat/intl regression
+(en_US symbol data byte-identical between intl 0.19 and 0.20.2), locale
+resolution safe on any device locale. All 4 non-blocking findings applied
+except the optional header-brittleness hardening (already guarded by
+hasLength(7)).
+
+**Acceptance criteria**: due-date picker (create + edit) starts the week on
+Monday, asserted by widget tests; app-level default in place for future
+widgets; analyzer clean, suite 250 green, E2E green; pubspec 1.0.7+10007 and
+fdroid index rebuilt after merge.
