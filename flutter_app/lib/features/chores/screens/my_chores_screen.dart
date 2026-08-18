@@ -94,8 +94,15 @@ class _MyChoresScreenState extends ConsumerState<MyChoresScreen> {
                       .where((c) => c.status == 'pending' && !c.isOverdue)
                       .toList()
                     // TASK-111: newest-created first (overdue block above
-                    // stays urgency-pinned by due date).
-                    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                    // stays urgency-pinned by due date). id breaks created_at
+                    // ties the same way the server does (scheduler-created
+                    // recurring instances share one transaction timestamp).
+                    ..sort((a, b) {
+                      final byCreated = b.createdAt.compareTo(a.createdAt);
+                      return byCreated != 0
+                          ? byCreated
+                          : b.id.compareTo(a.id);
+                    });
               final todo = [...overdue, ...pending];
               final done =
                   myChores

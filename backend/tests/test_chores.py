@@ -213,7 +213,7 @@ async def _backdate_chore(
     therefore backdate directly in the DB for deterministic results.
     """
     async with sf() as session:
-        await session.execute(
+        result = await session.execute(
             text(
                 "UPDATE chore_instances SET created_at = now() - make_interval(days => :days) "
                 "WHERE definition_id IN ("
@@ -222,6 +222,12 @@ async def _backdate_chore(
                 ")"
             ),
             {"days": days_ago, "household_id": household_id, "title": title},
+        )
+        # Guard against silently backdating the wrong rows (e.g. duplicate
+        # titles in the household): exactly one instance is expected.
+        assert result.rowcount == 1, (
+            f"expected 1 chore_instances row for title {title!r}, "
+            f"got {result.rowcount}"
         )
         await session.commit()
 

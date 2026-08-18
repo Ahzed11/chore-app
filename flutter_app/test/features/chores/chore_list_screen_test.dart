@@ -262,11 +262,24 @@ void main() {
         '(TASK-111)', (tester) async {
       // The backend now returns chores ordered by created_at DESC; the list
       // must render them exactly in that order without re-sorting. The first
-      // provided chore is the newest-created one.
+      // provided chore is the newest-created one (distinct createdAt values
+      // so the fixture order is unambiguous).
       final chores = [
-        _chore(id: 'c_newest', title: 'Newest task'),
-        _chore(id: 'c_middle', title: 'Middle task'),
-        _chore(id: 'c_oldest', title: 'Oldest task'),
+        _chore(
+          id: 'c_newest',
+          title: 'Newest task',
+          createdAt: DateTime(2026, 1, 3),
+        ),
+        _chore(
+          id: 'c_middle',
+          title: 'Middle task',
+          createdAt: DateTime(2026, 1, 2),
+        ),
+        _chore(
+          id: 'c_oldest',
+          title: 'Oldest task',
+          createdAt: DateTime(2026, 1, 1),
+        ),
       ];
       await tester.pumpWidget(
         _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
