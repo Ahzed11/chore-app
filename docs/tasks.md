@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**108 tasks complete, 3 pending (TASK-109 … TASK-111).** Completed task bodies
+**111 tasks complete, 2 pending (TASK-109, TASK-111).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
@@ -17,7 +17,7 @@ acceptance criteria, ledger row).
 
 ---
 
-## Status Ledger (updated 2026-08-14)
+## Status Ledger (updated 2026-08-18)
 
 | Range | Status |
 |---|---|
@@ -58,6 +58,9 @@ acceptance criteria, ledger row).
 | TASK-106 | ✅ Done 2026-08-14 — backend chore-template endpoints: `GET /households/{id}/chores/templates` (active definitions, newest first, hidden ones excluded) + `POST /chores/{definition_id}/hide` (admin-only, sets new `hidden_from_suggestions` column via Alembic migration); `ChoreTemplateResponse` schema; hiding ≠ deleting (instances stay in the chore list); 5 integration tests; suite 253 @ 97.4% — archived. |
 | TASK-107 | ✅ Done 2026-08-14 — Flutter template picker: `ChoreTemplate` model, `choreTemplatesProvider` (hide updates state directly), "Start from a previous task" horizontal suggestions on the create screen (create mode only) — tap copies exactly title/description/category/effort_level, X removes the suggestion via the hide endpoint; 4 widget tests; suite 233, analyzer clean — archived. |
 | TASK-108 | ✅ Done 2026-08-15 — Flutter "Copy from existing task": explicit `OutlinedButton.icon` on the create form (create mode only) opens a `showModalBottomSheet<ChoreTemplate>` listing the household's existing tasks (reuses TASK-106 `/templates` + `choreTemplatesProvider`, awaiting `.future` so the first tap isn't a stale read); selecting a row copies exactly title/description/category/effort_level and leaves due date/chore type/recurrence/assignee untouched; empty list → snackbar, no sheet; replaced the TASK-107 auto-suggestion strip (widgets removed, tests rewritten); 3 widget tests; suite 232, analyzer clean — archived. |
+| TASK-110 | ✅ Done 2026-08-18 — autonomous E2E testing harness, both layers: Layer-1 headless layout/overflow smoke sweep (`test/features/_layout_smoke_test.dart`, every major screen at phone + narrow/large-text sizes, sanity-verified to fail on a deliberate overflow); Layer-2 `integration_test/app_flows_test.dart` on the Linux desktop running the REAL app against a live backend (register → household → chore → copy-from-existing → dismiss → complete → leaderboard → logout), headless via dbus+gnome-keyring+xvfb; `docs/testing.md` documents commands + how to add screens/flows. The harness caught and drove two fixes: TASK-112 (category dropdown overflow) and TASK-113 (backend pool hardening) — archived. |
+| TASK-112 | ✅ Done 2026-08-18 — category dropdown RenderFlex overflow on narrow screens / large text (create form): `isExpanded: true` + Flexible ellipsizing item text; narrow/large-text variant added to the Layer-1 sweep (fails without the fix) — archived. |
+| TASK-113 | ✅ Done 2026-08-18 — backend connection-pool hardening after a silent read failure (register 201 → login 401 while SELECTs returned empty in a long-lived uvicorn): `pool_recycle=1800`, dedicated pytest DB `choreapp_test_db` (tests drop/recreate the schema per session), docs record the "fresh server per E2E run" + "never pytest a live DB" rules — archived. |
 
 ---
 
@@ -231,72 +234,13 @@ tests that exercise the paths the current tests miss.
 sheet opens and scrolls on a real device without any layout exception (verify
 via TASK-110's harness once available).
 
----
-
-## TASK-110: Autonomous end-to-end app testing harness (find + fix issues)
-
-**Domain**: QA / test infrastructure (Flutter + backend)
-**Depends on**: none (independent of TASK-109; its harness is what catches the TASK-109 class of bug)
-**Branch**: `feat/e2e-testing-harness`
-
-**What & why**: We need a repeatable, headless way for an agent to run the REAL
-app (not just unit/widget tests) and surface runtime/UI bugs — layout
-exceptions, overflow, broken flows — then fix them. The copy-control bug slipped
-through because the widget test used a single data point. Build two layers, in
-cost order.
-
-**Layer 1 — layout/overflow sweep (widget tests, no new system deps):**
-A smoke harness that pumps each screen/flow with empty / one / many data
-variants and asserts `expect(tester.takeException(), isNull)` after
-`pumpAndSettle()`. This is the cheapest detector for the class of bug we just
-hit. Add `flutter_app/test/features/_layout_smoke_test.dart` (or extend the
-existing per-screen tests) that iterates: households list, chore list
-(empty/one/many, each status), create-chore form (incl. opening the
-copy-from-existing-task sheet with many tasks), my-chores screen, leaderboard,
-groceries list. Each variant asserts no uncaught exception. Document that any
-`RenderFlex overflow`/`unbounded height` caught here is a real bug to fix.
-
-**Layer 2 — `integration_test` on the Linux desktop device (true E2E):**
-Only the `android/` platform folder exists and the Linux desktop toolchain is
-missing, so add it:
-1. `sudo dnf install -y cmake ninja-build clang gtk3-devel pkg-config`
-   (`flutter doctor` confirms; sudo password is in the user's memory notes).
-2. From `flutter_app/`: `flutter create --platforms=linux .` (adds `linux/`).
-3. Add dev dependency: `integration_test: {sdk: flutter}` to `pubspec.yaml`.
-4. Start the backend: podman container `choreapp-db` (postgres, 5432), then
-   `cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000` with the
-   usual `DATABASE_URL`/`JWT_SECRET` env (see the repo's test README / TASK-001
-   notes). Run the app's migrations (`uv run alembic upgrade head`).
-5. Write `integration_test/app_flows_test.dart` using
-   `IntegrationTestWidgetsFlutterBinding.ensureInitialized()`, covering the full
-   journey: register → create household → create a chore → **copy from existing
-   task** (select a previous task, assert the 4 fields prefilled) → dismiss →
-   complete → leaderboard points → logout. Use `--dart-define` to point the app
-   at the local server:
-   ```
-   flutter test integration_test/app_flows_test.dart -d linux \
-     --dart-define=API_BASE_URL=http://localhost:8000
-   ```
-   (`AppConfig.baseUrl` reads `API_BASE_URL`; default is the Android-emulator
-   `10.0.2.2:8000`.) On a headless box wrap with `xvfb-run -a …`.
-6. (Optional alternative, lower priority) Flutter web + browser automation:
-   `flutter create --platforms=web .`, then
-   `flutter run -d web-server --web-port 8080 --web-renderer html
-   --dart-define=API_BASE_URL=http://localhost:8000` and drive it with the
-   browser / computer_use tools. Note CanvasKit (default) renders to a canvas
-   with no DOM, so use `--web-renderer html` for DOM-driven automation.
-
-**Agent workflow**: run the Layer-1 sweep → record failures → fix → re-run →
-run the Layer-2 E2E flow → record any failures → fix → re-run. Log every found
-issue and its fix as a ledger entry (TASK-1xx), archiving bodies as usual. The
-first concrete target: reproduce and confirm the TASK-109 copy-control fix
-through BOTH layers.
-
-**Acceptance criteria**: Layer-1 sweep runs headlessly and fails on a
-deliberately-introduced overflow (sanity check that it can catch bugs); Layer-2
-E2E flow passes end-to-end against a live local backend; both are documented in
-a `docs/testing.md` (commands + how to add a flow) so any future agent can run
-them without guidance.
+**Status update 2026-08-18 (TASK-110)**: the harness could NOT reproduce a
+layout failure in the current sheet — the Layer-1 sweep opens it with 15+
+templates at phone sizes, scrolls to the last row, and asserts zero exceptions,
+and the Layer-2 E2E exercises the full copy flow (select a row, assert the 4
+fields prefilled) against a live backend; both pass. If the control is still
+reported broken on a real device, apply the `DraggableScrollableSheet` fix
+below as hardening — otherwise this task can be closed as no-repro.
 
 ---
 

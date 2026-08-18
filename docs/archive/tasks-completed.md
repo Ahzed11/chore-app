@@ -3915,3 +3915,137 @@ tasks from the copy-list is still wanted, reuse the existing TASK-106
 `POST .../hide` endpoint and add a small hide affordance on each sheet row —
 out of scope here unless requested.
 ---
+
+## TASK-110: Autonomous end-to-end app testing harness (find + fix issues)
+
+**Domain**: QA / test infrastructure (Flutter + backend)
+**Depends on**: none (independent of TASK-109; its harness is what catches the TASK-109 class of bug)
+**Branch**: `feat/e2e-testing-harness`
+
+**What & why**: We need a repeatable, headless way for an agent to run the REAL
+app (not just unit/widget tests) and surface runtime/UI bugs — layout
+exceptions, overflow, broken flows — then fix them. The copy-control bug slipped
+through because the widget test used a single data point. Build two layers, in
+cost order.
+
+**Layer 1 — layout/overflow sweep (widget tests, no new system deps):**
+A smoke harness that pumps each screen/flow with empty / one / many data
+variants and asserts `expect(tester.takeException(), isNull)` after
+`pumpAndSettle()`. This is the cheapest detector for the class of bug we just
+hit. Add `flutter_app/test/features/_layout_smoke_test.dart` (or extend the
+existing per-screen tests) that iterates: households list, chore list
+(empty/one/many, each status), create-chore form (incl. opening the
+copy-from-existing-task sheet with many tasks), my-chores screen, leaderboard,
+groceries list. Each variant asserts no uncaught exception. Document that any
+`RenderFlex overflow`/`unbounded height` caught here is a real bug to fix.
+
+**Layer 2 — `integration_test` on the Linux desktop device (true E2E):**
+Only the `android/` platform folder exists and the Linux desktop toolchain is
+missing, so add it:
+1. `sudo dnf install -y cmake ninja-build clang gtk3-devel pkg-config`
+   (`flutter doctor` confirms; sudo password is in the user's memory notes).
+2. From `flutter_app/`: `flutter create --platforms=linux .` (adds `linux/`).
+3. Add dev dependency: `integration_test: {sdk: flutter}` to `pubspec.yaml`.
+4. Start the backend: podman container `choreapp-db` (postgres, 5432), then
+   `cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000` with the
+   usual `DATABASE_URL`/`JWT_SECRET` env (see the repo's test README / TASK-001
+   notes). Run the app's migrations (`uv run alembic upgrade head`).
+5. Write `integration_test/app_flows_test.dart` using
+   `IntegrationTestWidgetsFlutterBinding.ensureInitialized()`, covering the full
+   journey: register → create household → create a chore → **copy from existing
+   task** (select a previous task, assert the 4 fields prefilled) → dismiss →
+   complete → leaderboard points → logout. Use `--dart-define` to point the app
+   at the local server:
+   ```
+   flutter test integration_test/app_flows_test.dart -d linux \
+     --dart-define=API_BASE_URL=http://localhost:8000
+   ```
+   (`AppConfig.baseUrl` reads `API_BASE_URL`; default is the Android-emulator
+   `10.0.2.2:8000`.) On a headless box wrap with `xvfb-run -a …`.
+6. (Optional alternative, lower priority) Flutter web + browser automation:
+   `flutter create --platforms=web .`, then
+   `flutter run -d web-server --web-port 8080 --web-renderer html
+   --dart-define=API_BASE_URL=http://localhost:8000` and drive it with the
+   browser / computer_use tools. Note CanvasKit (default) renders to a canvas
+   with no DOM, so use `--web-renderer html` for DOM-driven automation.
+
+**Agent workflow**: run the Layer-1 sweep → record failures → fix → re-run →
+run the Layer-2 E2E flow → record any failures → fix → re-run. Log every found
+issue and its fix as a ledger entry (TASK-1xx), archiving bodies as usual. The
+first concrete target: reproduce and confirm the TASK-109 copy-control fix
+through BOTH layers.
+
+**Acceptance criteria**: Layer-1 sweep runs headlessly and fails on a
+deliberately-introduced overflow (sanity check that it can catch bugs); Layer-2
+E2E flow passes end-to-end against a live local backend; both are documented in
+a `docs/testing.md` (commands + how to add a flow) so any future agent can run
+them without guidance.
+
+---
+
+## TASK-112: Category dropdown RenderFlex overflow on narrow screens / large text
+
+**Domain**: Flutter frontend — create-chore form
+**Depends on**: none (found by TASK-110's Layer-1 sweep)
+**Branch**: `feat/e2e-testing-harness`
+
+**What & why**: The `DropdownButtonFormField` (create_chore_screen.dart,
+`Key('category_dropdown')`) overflows by 26px on the right at 320px width and
+by 23px at textScale 1.3 — `RenderFlex overflowed by N pixels on the right`.
+The dropdown's internal `IndexedStack` (which holds every item row) sizes to
+the widest item; the field's content area (228px at 320px screens) can't fit
+it, and the whole button overflows the InputDecorator. On narrow devices the
+create form throws layout exceptions; the dropdown looks broken.
+
+**Fix**: `isExpanded: true` on the DropdownButtonFormField (the internal Row
+then wraps the IndexedStack in `Expanded`, bounding it to the field width) and
+item children changed to `Row[Icon, SizedBox(10), Flexible(Text(..., maxLines:
+1, overflow: ellipsis))]` so long labels shrink instead of overflowing. Safe in
+the open menu too — Flutter constrains menu items to the button width (tight
+`minWidth == maxWidth` constraints in `_DropdownRouteLayout`).
+
+**Tests**: the Layer-1 sweep now pumps the create form + opens the category
+menu at 320x568 with textScale 1.3 and asserts no exception — this test fails
+without the fix.
+
+**Acceptance criteria**: `flutter analyze --no-pub --no-fatal-infos` clean;
+sweep green including the narrow/large-text dropdown variant; existing
+create-chore widget tests unchanged and green.
+
+---
+
+## TASK-113: Backend connection-pool hardening after silent read failure
+
+**Domain**: Backend — DB session/pool reliability
+**Depends on**: none (observed while running TASK-110's Layer-2 E2E)
+**Branch**: `feat/e2e-testing-harness`
+
+**What & why**: During E2E runs a long-lived uvicorn started returning EMPTY
+results for every SELECT while INSERTs still worked: `POST /auth/register`
+201 (row committed and verifiable in the DB, hash round-trips fine) followed
+immediately by `POST /auth/login` 401 "Invalid credentials" via the
+user-is-None branch (no `user.login_failed` event), and the register
+duplicate-check SELECT also saw no rows (the duplicate 409 came from the
+unique index, not the pre-check). The same user logged in fine minutes later.
+In-process ASGI register→login worked; a fresh uvicorn worked. No DB errors,
+no code change — the code was proven correct, so the fault lay in the long-lived
+process's pooled connections (stale transaction state after interrupted client
+connections — aborted E2E app runs are the prime culprit). Additionally, the
+pytest suite DROPS and recreates the schema per session on
+`TEST_DATABASE_URL`; pointing that at the same DB a live server uses corrupts
+the server's pool mid-flight.
+
+**Changes**:
+1. `backend/app/db/session.py`: `pool_recycle=1800` so pooled connections are
+   recycled every 30 minutes, bounding the blast radius of any stale-connection
+   state. Comment documents the incident and the restart remedy.
+2. Dedicated test database `choreapp_test_db` in the postgres container;
+   `.hermes.md` and `docs/testing.md` now point `TEST_DATABASE_URL` there.
+3. `docs/testing.md` documents two hard rules: (a) start uvicorn fresh for
+   every E2E run; (b) never run pytest against a live server's database.
+   Symptom → remedy: register 201 + login 401 with the user logging in later =
+   stale pool → restart uvicorn.
+
+**Acceptance criteria**: backend suite 253 passed @ 97.4% with
+`TEST_DATABASE_URL` on the dedicated DB; E2E journey passes against a fresh
+server; docs record both rules.
