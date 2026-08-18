@@ -72,15 +72,18 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
     // the same block ordering: overdue by dueDate ASC (most-overdue first),
     // everything else newest-created first (createdAt DESC + id tiebreaker,
     // the TASK-111 server convention). The other tabs keep server order.
-    // Note: _activeFilter is 'all' initially (lowercase) and 'All' after the
-    // tab is tapped — compare case-insensitively.
+    // (The check is case-insensitive — _ChoreFilterTabs always passes the
+    // lowercase label, so a capitalized value would be dead-defensive.)
     if (_activeFilter.toLowerCase() == 'all') {
       filtered.sort((a, b) {
         final aOverdue = a.isOverdue ? 0 : 1;
         final bOverdue = b.isOverdue ? 0 : 1;
         if (aOverdue != bOverdue) return aOverdue - bOverdue;
         if (aOverdue == 0) {
-          return a.dueDate.compareTo(b.dueDate);
+          // Most-overdue first; id DESC breaks same-dueDate ties so the
+          // block order is deterministic (List.sort is unstable).
+          final byDue = a.dueDate.compareTo(b.dueDate);
+          return byDue != 0 ? byDue : b.id.compareTo(a.id);
         }
         final byCreated = b.createdAt.compareTo(a.createdAt);
         return byCreated != 0 ? byCreated : b.id.compareTo(a.id);

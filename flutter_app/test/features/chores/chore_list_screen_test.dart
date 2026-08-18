@@ -265,24 +265,28 @@ void main() {
       // result is still newest-created first. The first provided chore is the
       // newest-created one (distinct createdAt values so the fixture order is
       // unambiguous).
+      // Far-future due dates (2029): isOverdue uses the real clock, so near
+      // dates would flip these fixtures to overdue as time passes and break
+      // the order assertions (adversarial review: same class of time-bomb as
+      // the fixture default past-due date).
       final chores = [
         _chore(
           id: 'c_newest',
           title: 'Newest task',
           createdAt: DateTime(2026, 1, 3),
-          dueDate: DateTime(2026, 12, 3),
+          dueDate: DateTime(2029, 12, 3),
         ),
         _chore(
           id: 'c_middle',
           title: 'Middle task',
           createdAt: DateTime(2026, 1, 2),
-          dueDate: DateTime(2026, 12, 2),
+          dueDate: DateTime(2029, 12, 2),
         ),
         _chore(
           id: 'c_oldest',
           title: 'Oldest task',
           createdAt: DateTime(2026, 1, 1),
-          dueDate: DateTime(2026, 12, 1),
+          dueDate: DateTime(2029, 12, 1),
         ),
       ];
       await tester.pumpWidget(
@@ -311,13 +315,15 @@ void main() {
 
       // Scrambled provider order (server order is creation-based): pending +
       // done + overdue mixed, including a PENDING chore whose due date passed
-      // (isOverdue must pin it too — same definition as My Chores).
+      // (isOverdue must pin it too — same definition as My Chores). Due dates
+      // are far-future where the fixture must be non-overdue (the real clock
+      // drives isOverdue), and clearly past where it must be overdue.
       final chores = [
         _chore(
           id: 'c_pending_new',
           title: 'New pending',
           createdAt: DateTime(2026, 7, 1),
-          dueDate: DateTime(2026, 12, 1),
+          dueDate: DateTime(2029, 12, 1),
         ),
         _chore(
           id: 'c_overdue_recent',
@@ -329,13 +335,13 @@ void main() {
           id: 'c_done',
           title: 'Done task',
           status: 'complete',
-          dueDate: DateTime(2026, 12, 1),
+          dueDate: DateTime(2029, 12, 1),
         ),
         _chore(
           id: 'c_pending_old',
           title: 'Old pending',
           createdAt: DateTime(2026, 1, 1),
-          dueDate: DateTime(2026, 12, 31),
+          dueDate: DateTime(2029, 12, 31),
         ),
         _chore(
           id: 'c_overdue_older',

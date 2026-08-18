@@ -187,9 +187,10 @@ the same in its All tab.
   and do NOT change the backend (its `created_at DESC, id DESC` stays the
   pagination order; the All tab re-sorts in memory like My Chores already
   does).
-- Accepted limitation (same as My Chores): the client re-sort can split an
-  overdue group across the 100-per-page fetch boundary in very large
-  households. The server order remains the pagination order.
+- Accepted limitation (same as My Chores): the client re-sort runs on the
+  fully fetched set (chores_provider fetches ALL pages, hard-capped at 10 ×
+  100), so it can only split an overdue group across pages once a household
+  exceeds ~1000 chores. The server order remains the pagination order.
 
 **Tests (REQUIRED)**:
 - Widget test (`test/features/chores/chore_list_screen_test.dart`): All tab
