@@ -258,27 +258,31 @@ void main() {
       expect(find.text('Mow the lawn'), findsOneWidget);
     });
 
-    testWidgets('renders chores in provider order — newest-created first '
-        '(TASK-111)', (tester) async {
-      // The backend now returns chores ordered by created_at DESC; the list
-      // must render them exactly in that order without re-sorting. The first
-      // provided chore is the newest-created one (distinct createdAt values
-      // so the fixture order is unambiguous).
+    testWidgets('renders non-overdue chores newest-created first '
+        '(TASK-111/TASK-116)', (tester) async {
+      // The backend returns chores ordered by created_at DESC and the All tab
+      // re-sorts to pin overdue on top (TASK-116); with NO overdue chores the
+      // result is still newest-created first. The first provided chore is the
+      // newest-created one (distinct createdAt values so the fixture order is
+      // unambiguous).
       final chores = [
         _chore(
           id: 'c_newest',
           title: 'Newest task',
           createdAt: DateTime(2026, 1, 3),
+          dueDate: DateTime(2026, 12, 3),
         ),
         _chore(
           id: 'c_middle',
           title: 'Middle task',
           createdAt: DateTime(2026, 1, 2),
+          dueDate: DateTime(2026, 12, 2),
         ),
         _chore(
           id: 'c_oldest',
           title: 'Oldest task',
           createdAt: DateTime(2026, 1, 1),
+          dueDate: DateTime(2026, 12, 1),
         ),
       ];
       await tester.pumpWidget(
@@ -295,6 +299,75 @@ void main() {
 
       expect(newestY, lessThan(middleY));
       expect(middleY, lessThan(oldestY));
+    });
+
+    testWidgets('All tab pins OVERDUE chores on top, most-overdue first '
+        '(TASK-116)', (tester) async {
+      // Tall viewport so all 6 cards are built and measurable.
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // Scrambled provider order (server order is creation-based): pending +
+      // done + overdue mixed, including a PENDING chore whose due date passed
+      // (isOverdue must pin it too — same definition as My Chores).
+      final chores = [
+        _chore(
+          id: 'c_pending_new',
+          title: 'New pending',
+          createdAt: DateTime(2026, 7, 1),
+          dueDate: DateTime(2026, 12, 1),
+        ),
+        _chore(
+          id: 'c_overdue_recent',
+          title: 'Overdue recent',
+          status: 'overdue',
+          dueDate: DateTime(2026, 6, 10),
+        ),
+        _chore(
+          id: 'c_done',
+          title: 'Done task',
+          status: 'complete',
+          dueDate: DateTime(2026, 12, 1),
+        ),
+        _chore(
+          id: 'c_pending_old',
+          title: 'Old pending',
+          createdAt: DateTime(2026, 1, 1),
+          dueDate: DateTime(2026, 12, 31),
+        ),
+        _chore(
+          id: 'c_overdue_older',
+          title: 'Overdue older',
+          status: 'overdue',
+          dueDate: DateTime(2026, 6, 1),
+        ),
+        _chore(
+          id: 'c_pending_late',
+          title: 'Pending past due',
+          status: 'pending',
+          dueDate: DateTime(2025, 1, 1),
+        ),
+      ];
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      double y(String id) =>
+          tester.getTopLeft(find.byKey(Key('chore_card_tap_$id'))).dy;
+
+      // Overdue block on top, most-overdue first: the pending-past-due chore
+      // (due 2025) leads, then overdue-status chores by dueDate ASC.
+      expect(y('c_pending_late'), lessThan(y('c_overdue_older')));
+      expect(y('c_overdue_older'), lessThan(y('c_overdue_recent')));
+      // Overdue block above every non-overdue chore.
+      expect(y('c_overdue_recent'), lessThan(y('c_pending_new')));
+      expect(y('c_overdue_recent'), lessThan(y('c_done')));
+      // Non-overdue chores: newest-created first, done included.
+      expect(y('c_pending_new'), lessThan(y('c_pending_old')));
+      expect(y('c_pending_old'), lessThan(y('c_done')));
     });
 
     // -------------------------------------------------------------------------
