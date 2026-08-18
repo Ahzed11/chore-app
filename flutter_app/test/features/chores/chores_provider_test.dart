@@ -60,6 +60,7 @@ Map<String, dynamic> _choreJson(
     'assignee_id': 'user-1',
     'assignee_name': 'Alice',
     'assigned_manually': false,
+    'created_at': '2027-01-01T00:00:00Z',
     'due_date': '2027-01-01T00:00:00Z',
     'status': status,
     'completed_at':

@@ -50,6 +50,7 @@ ChoreModel _chore({
   String category = 'kitchen',
   String effortLevel = 'easy',
   DateTime? dueDate,
+  DateTime? createdAt,
 }) {
   return ChoreModel(
     id: id,
@@ -58,6 +59,7 @@ ChoreModel _chore({
     assigneeId: _kUserId,
     assigneeName: 'Test User',
     assignedManually: false,
+    createdAt: createdAt ?? DateTime(2026, 1, 1),
     dueDate: dueDate ?? DateTime(2026, 6, 25),
     status: status,
     completedAt: status == 'complete' || status == 'dismissed'

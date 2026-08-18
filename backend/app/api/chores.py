@@ -54,6 +54,7 @@ def _instance_response_from_row(
         assignee_id=instance.assignee_id,
         assignee_name=assignee_name,
         assigned_manually=instance.assigned_manually,
+        created_at=instance.created_at,  # TASK-111
         due_date=instance.due_date,
         status=instance.status,
         completed_at=instance.completed_at,
@@ -220,7 +221,7 @@ async def list_chores(
         .join(ChoreDefinition, ChoreInstance.definition_id == ChoreDefinition.id)
         .outerjoin(User, ChoreInstance.assignee_id == User.id)
         .where(*base_filters)
-        .order_by(ChoreInstance.due_date, ChoreInstance.id)
+        .order_by(ChoreInstance.created_at.desc(), ChoreInstance.id.desc())
         .limit(limit)
         .offset(offset)
     )

@@ -35,6 +35,7 @@ ChoreModel _chore({
   String? assigneeId = _kCurrentUserId,
   DateTime? dueDate,
   DateTime? completedAt,
+  DateTime? createdAt,
   int? pointsAwarded,
 }) {
   return ChoreModel(
@@ -44,6 +45,7 @@ ChoreModel _chore({
     assigneeId: assigneeId,
     assigneeName: assigneeId == _kCurrentUserId ? 'Test User' : null,
     assignedManually: false,
+    createdAt: createdAt ?? DateTime(2026, 1, 1),
     dueDate: dueDate ?? DateTime(2026, 12, 31),
     status: status,
     completedAt: completedAt,
@@ -103,6 +105,7 @@ ChoreModel _asComplete(ChoreModel chore) {
     assigneeId: chore.assigneeId,
     assigneeName: chore.assigneeName,
     assignedManually: chore.assignedManually,
+    createdAt: chore.createdAt,
     dueDate: chore.dueDate,
     status: 'complete',
     completedAt: DateTime.now(),
@@ -125,6 +128,7 @@ ChoreModel _asDismissed(ChoreModel chore) {
     assigneeId: chore.assigneeId,
     assigneeName: chore.assigneeName,
     assignedManually: chore.assignedManually,
+    createdAt: chore.createdAt,
     dueDate: chore.dueDate,
     status: 'dismissed',
     completedAt: DateTime.now(),
@@ -421,6 +425,50 @@ void main() {
 
       // "Due 5 days ago" has an older dueDate → should appear first (lower Y).
       expect(lateY, lessThan(earlyY));
+    });
+
+    testWidgets('sorts two pending chores by createdAt DESC (newest first)',
+        (tester) async {
+      // TASK-111: pending uses creation time, not due date.
+      tester.view.physicalSize = const Size(800, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final now = DateTime.now();
+      final chores = [
+        // Older-created but due SOONER — must sink to the bottom regardless.
+        _chore(
+          id: 'c_pending_old',
+          title: 'Old task due sooner',
+          status: 'pending',
+          createdAt: now.subtract(const Duration(days: 5)),
+          dueDate: now.add(const Duration(days: 1)),
+        ),
+        // Newer-created but due LATER — must be on top.
+        _chore(
+          id: 'c_pending_new',
+          title: 'New task due later',
+          status: 'pending',
+          createdAt: now.subtract(const Duration(days: 1)),
+          dueDate: now.add(const Duration(days: 10)),
+        ),
+      ];
+
+      await tester.pumpWidget(_buildScreen(chores: chores));
+      await tester.pump();
+
+      final oldY = tester
+          .getTopLeft(find.byKey(const Key('my_chore_card_c_pending_old')))
+          .dy;
+      final newY = tester
+          .getTopLeft(find.byKey(const Key('my_chore_card_c_pending_new')))
+          .dy;
+
+      expect(newY, lessThan(oldY),
+          reason: 'Newest-created pending chore must be on top (createdAt DESC)');
     });
 
     testWidgets('pending chore with past due date sorts with overdue group',

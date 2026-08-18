@@ -19,6 +19,7 @@ class ChoreModel {
     this.assigneeId,
     this.assigneeName,
     required this.assignedManually,
+    required this.createdAt,
     required this.dueDate,
     required this.status,
     this.completedAt,
@@ -36,6 +37,7 @@ class ChoreModel {
   final String? assigneeId;
   final String? assigneeName;
   final bool assignedManually;
+  final DateTime createdAt; // TASK-111: newest-first ordering key
   final DateTime dueDate;
   final String status; // pending | complete | overdue | cancelled | dismissed
   final DateTime? completedAt;
@@ -97,6 +99,7 @@ class ChoreModel {
       assigneeId: json['assignee_id'] as String?,
       assigneeName: json['assignee_name'] as String?,
       assignedManually: json['assigned_manually'] as bool,
+      createdAt: DateTime.parse(json['created_at'] as String),
       dueDate: DateTime.parse(json['due_date'] as String),
       status: json['status'] as String,
       completedAt: json['completed_at'] != null
@@ -119,6 +122,7 @@ class ChoreModel {
       'assignee_id': assigneeId,
       'assignee_name': assigneeName,
       'assigned_manually': assignedManually,
+      'created_at': createdAt.toIso8601String(),
       'due_date': dueDate.toIso8601String(),
       'status': status,
       'completed_at': completedAt?.toIso8601String(),
