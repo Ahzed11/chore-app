@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:chore_app/core/config/app_locale.dart';
 import 'package:chore_app/features/chores/models/chore_form_init_data.dart';
 import 'package:chore_app/features/chores/models/chore_model.dart';
 import 'package:chore_app/features/chores/models/chore_template.dart';
@@ -157,6 +158,11 @@ Widget _buildScreen({
     ],
     child: MaterialApp(
       theme: AppTheme.lightTheme,
+      // Mirror the app's real locale config (TASK-115) so date-picker tests
+      // assert the same Monday-first behaviour users get.
+      localizationsDelegates: kLocalizationsDelegates,
+      supportedLocales: kSupportedLocales,
+      locale: kAppLocale,
       home: CreateChoreScreen(
         householdId: _kHouseholdId,
         initData: initData,
@@ -416,6 +422,73 @@ void main() {
         await tester.pump();
 
         expect(find.byKey(const Key('due_date_field')), findsOneWidget);
+      });
+
+      // ---------------------------------------------------------------------
+      // TASK-115: the calendar must ALWAYS start the week on Monday
+      // ---------------------------------------------------------------------
+
+      group('date picker weekday order (TASK-115)', () {
+        /// Opens the due-date picker and returns the weekday-header cells in
+        /// column order. This Material version renders them as single letters
+        /// (M T W T F S S for a Monday-first calendar; S M T W T F S for a
+        /// Sunday-first one) — the only single-letter texts in the dialog.
+        Future<List<String>> weekdayHeaders(WidgetTester tester) async {
+          await tester.tap(find.byKey(const Key('due_date_field')));
+          await tester.pumpAndSettle();
+
+          final headers = tester
+              .widgetList<Text>(find.descendant(
+                of: find.byType(DatePickerDialog),
+                matching: find.byType(Text),
+              ))
+              .map((t) => t.data)
+              .whereType<String>()
+              .where((d) => d.length == 1 && 'MTWFS'.contains(d))
+              .toList();
+          expect(
+            headers,
+            hasLength(7),
+            reason: 'the picker must render its 7 weekday header cells',
+          );
+          return headers;
+        }
+
+        testWidgets('calendar starts the week on Monday (create mode)',
+            (tester) async {
+          _expandView(tester);
+          await tester.pumpWidget(_buildScreen());
+          await tester.pump();
+          await tester.pump();
+
+          expect(
+            await weekdayHeaders(tester),
+            ['M', 'T', 'W', 'T', 'F', 'S', 'S'],
+            reason: 'first weekday column must be Monday (TASK-115)',
+          );
+        });
+
+        testWidgets('calendar starts the week on Monday (edit mode)',
+            (tester) async {
+          _expandView(tester);
+          final initData = ChoreFormInitData(
+            definitionId: 'def-42',
+            title: 'Existing chore',
+            category: 'bedroom',
+            effortLevel: 'hard',
+            choreType: 'one_off',
+            firstDueDate: DateTime.now().add(const Duration(days: 14)),
+          );
+          await tester.pumpWidget(_buildScreen(initData: initData));
+          await tester.pump();
+          await tester.pump();
+
+          expect(
+            await weekdayHeaders(tester),
+            ['M', 'T', 'W', 'T', 'F', 'S', 'S'],
+            reason: 'first weekday column must be Monday (TASK-115)',
+          );
+        });
       });
 
       testWidgets('pre-populated date is displayed in the field when editing',
