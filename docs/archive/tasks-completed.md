@@ -4242,3 +4242,53 @@ hasLength(7)).
 Monday, asserted by widget tests; app-level default in place for future
 widgets; analyzer clean, suite 250 green, E2E green; pubspec 1.0.7+10007 and
 fdroid index rebuilt after merge.
+
+---
+
+## TASK-116: All Chores — All tab pins overdue tasks on top
+
+**Domain**: Flutter frontend — All Chores list ordering
+**Depends on**: TASK-111 (createdAt on ChoreModel + the newest-first convention)
+**Branch**: `feat/all-chores-overdue-pinned`
+
+**What & why**: User request (2026-08-18): in the All Chores screen's ALL tab,
+overdue tasks must stay pinned at the top of the list. Today the All tab
+preserves the server order (`created_at DESC` — newest first, TASK-111), so an
+overdue chore created long ago sinks to the bottom and is easy to miss. My
+Chores already pins overdue on top (TASK-111 decision); All Chores should do
+the same in its All tab.
+
+**Fix applied**:
+- `_applyFilter` (chore_list_screen.dart) re-sorts the All tab
+  (case-insensitive `'all'` check): overdue chores first via the same
+  `ChoreModel.isOverdue` definition as My Chores (status 'overdue' OR pending
+  past due); overdue block by dueDate ASC with an id-DESC tiebreaker
+  (deterministic — List.sort is unstable); everything else createdAt DESC +
+  id tiebreaker (TASK-111 convention). Pending/Overdue/Done tabs keep server
+  order; backend unchanged (its created_at DESC, id DESC stays the pagination
+  order; the provider fetches all pages, hard cap 10×100, so the re-sort can
+  only split the overdue group past ~1000 chores — accepted, same as My
+  Chores).
+- pubspec bumped to 1.0.8+10008.
+
+**Tests**:
+- New widget test: scrambled 6-chore list (pending + done + overdue + a
+  pending-past-due chore) with Y-coordinate assertions — overdue block on
+  top, most-overdue first, then newest-first; genuinely discriminates (fails
+  without the sort). TASK-111 newest-first test updated for the new contract
+  (non-overdue newest-first) with far-future (2029) due dates — isOverdue
+  uses the real clock, so near dates were a time-bomb (review finding).
+- All fixtures that must be non-overdue use 2029 due dates.
+
+**Adversarial review (2026-08-18)**: APPROVE — comparator a valid total
+order, no provider-list aliasing, no collateral test breakage, new test
+non-vacuous. All 5 findings addressed: id tiebreaker in the overdue block
+(minor), far-future fixture dates (minor time-bomb), comment corrected (nit),
+docs pagination-caveat wording fixed (nit), and the midnight-crossing
+rebuild-trigger gap accepted as a pre-existing app-wide pattern identical to
+My Chores (nit, no code change).
+
+**Acceptance criteria**: All tab shows overdue on top (most-overdue first,
+same isOverdue definition as My Chores) then newest-first; other tabs
+unchanged; analyzer clean, suite 251 green, E2E green; pubspec 1.0.8+10008
+and fdroid index rebuilt after merge.
