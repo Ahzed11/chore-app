@@ -57,6 +57,7 @@ class ChoreInstanceResponse(BaseModel):
     assignee_id: Optional[uuid.UUID]
     assignee_name: Optional[str]  # joined from User.display_name
     assigned_manually: bool
+    created_at: datetime  # TASK-111: exposed so clients can sort newest-first
     due_date: date
     status: str
     completed_at: Optional[datetime]

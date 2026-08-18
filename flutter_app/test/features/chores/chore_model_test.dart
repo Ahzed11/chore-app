@@ -12,6 +12,7 @@ void main() {
         'assignee_id': 'user-1',
         'assignee_name': 'Alice',
         'assigned_manually': false,
+        'created_at': '2027-01-01T00:00:00Z',
         'due_date': '2027-01-01T00:00:00Z',
         'status': 'dismissed',
         'completed_at': '2027-01-02T00:00:00Z',

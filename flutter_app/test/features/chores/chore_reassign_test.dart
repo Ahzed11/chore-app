@@ -26,6 +26,7 @@ ChoreModel _chore({
   String? assigneeId = 'user-2',
   String? assigneeName = 'Bob',
   DateTime? dueDate,
+  DateTime? createdAt,
 }) {
   return ChoreModel(
     id: id,
@@ -34,6 +35,7 @@ ChoreModel _chore({
     assigneeId: assigneeId,
     assigneeName: assigneeName,
     assignedManually: false,
+    createdAt: createdAt ?? DateTime(2026, 1, 1),
     dueDate: dueDate ?? DateTime(2027, 6, 25),
     status: status,
     title: title,

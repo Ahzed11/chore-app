@@ -247,6 +247,18 @@ void main() {
       reason: 'chore #2 (copied) appears in the list',
     );
 
+    // TASK-111: newest-created chore must be on top — the copied chore was
+    // created after the original, so it renders above it.
+    final copiedY = tester
+        .getTopLeft(find.text('Wash the dishes (copied)'))
+        .dy;
+    final originalY = tester.getTopLeft(find.text('Wash the dishes')).dy;
+    expect(
+      copiedY,
+      lessThan(originalY),
+      reason: 'newest-created chore appears at the top of the list',
+    );
+
     // --- Dismiss chore #1 (TASK-104: long-press → Dismiss) ----------------
     final firstChore = find.text('Wash the dishes');
     await waitFor(tester, firstChore, reason: 'chore #1 in the list');

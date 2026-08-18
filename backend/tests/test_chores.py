@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.deps import get_current_user, require_admin, require_household_member
@@ -196,6 +197,39 @@ def _one_off_payload(
     if overrides:
         payload.update(overrides)
     return payload
+
+
+async def _backdate_chore(
+    sf: async_sessionmaker,
+    household_id: uuid.UUID,
+    title: str,
+    days_ago: int,
+) -> None:
+    """Backdate a chore instance's created_at by `days_ago` days (TASK-111).
+
+    Postgres ``now()`` is transaction time, so chores created in quick
+    succession can tie on ``created_at`` — and the ``id DESC`` tiebreaker is
+    random UUIDs, which would make ordering assertions flaky. Ordering tests
+    therefore backdate directly in the DB for deterministic results.
+    """
+    async with sf() as session:
+        result = await session.execute(
+            text(
+                "UPDATE chore_instances SET created_at = now() - make_interval(days => :days) "
+                "WHERE definition_id IN ("
+                "  SELECT cd.id FROM chore_definitions cd "
+                "  WHERE cd.household_id = :household_id AND cd.title = :title"
+                ")"
+            ),
+            {"days": days_ago, "household_id": household_id, "title": title},
+        )
+        # Guard against silently backdating the wrong rows (e.g. duplicate
+        # titles in the household): exactly one instance is expected.
+        assert result.rowcount == 1, (
+            f"expected 1 chore_instances row for title {title!r}, "
+            f"got {result.rowcount}"
+        )
+        await session.commit()
 
 
 def _recurring_payload(
@@ -705,22 +739,26 @@ async def test_list_chores_pagination(async_client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_list_chores_pagination_is_stable(async_client: AsyncClient) -> None:
-    """Pages ordered by (due_date, id) never overlap or skip rows."""
+    """Pages ordered by (created_at DESC, id DESC) never overlap or skip rows.
+
+    TASK-111: the order changed from (due_date, id) ASC to
+    (created_at, id) DESC. created_at is backdated per chore so the
+    assertions are deterministic (consecutive creates can tie on Postgres
+    now(), and the id DESC tiebreaker is random UUIDs).
+    """
     sf = _get_session_factory()
     household_id, _ = await _seed_household_with_member(sf)
 
-    # Three chores due on distinct days.
-    base_day = date.today()
-    for offset_days, title in enumerate(("Chore A", "Chore B", "Chore C")):
+    # Three chores created via the API; then backdate A (-2d) and B (-1d) so
+    # the expected order is unambiguous: C (newest), B, A.
+    for title in ("Chore A", "Chore B", "Chore C"):
         resp = await async_client.post(
             f"/households/{household_id}/chores",
-            json=_one_off_payload(
-                household_id,
-                overrides={"title": title},
-                due_date=base_day + timedelta(days=offset_days),
-            ),
+            json=_one_off_payload(household_id, overrides={"title": title}),
         )
         assert resp.status_code == 201, resp.text
+    await _backdate_chore(sf, household_id, "Chore A", days_ago=2)
+    await _backdate_chore(sf, household_id, "Chore B", days_ago=1)
 
     page1 = await async_client.get(
         f"/households/{household_id}/chores",
@@ -741,9 +779,43 @@ async def test_list_chores_pagination_is_stable(async_client: AsyncClient) -> No
     assert set(ids_page1).isdisjoint(ids_page2)
     assert len(set(ids_page1 + ids_page2)) == 3
 
-    # Ordering is by due_date ascending (then id for ties).
-    due_dates = [item["due_date"] for item in page1.json()["items"] + page2.json()["items"]]
-    assert due_dates == sorted(due_dates)
+    # Ordering is by created_at descending (then id for ties); every item
+    # carries created_at (TASK-111).
+    items = page1.json()["items"] + page2.json()["items"]
+    assert all("created_at" in item for item in items)
+    created_ats = [item["created_at"] for item in items]
+    assert created_ats == sorted(created_ats, reverse=True)
+    assert [item["title"] for item in items] == ["Chore C", "Chore B", "Chore A"]
+
+
+@pytest.mark.asyncio
+async def test_list_chores_newest_first(async_client: AsyncClient) -> None:
+    """TASK-111: GET /chores returns newest-created chores on top."""
+    sf = _get_session_factory()
+    household_id, _ = await _seed_household_with_member(sf)
+
+    for title in ("First chore", "Second chore", "Third chore"):
+        resp = await async_client.post(
+            f"/households/{household_id}/chores",
+            json=_one_off_payload(household_id, overrides={"title": title}),
+        )
+        assert resp.status_code == 201, resp.text
+
+    # Backdate the first two so the order is deterministic (created_at ties
+    # would otherwise be broken by random-UUID ids).
+    await _backdate_chore(sf, household_id, "First chore", days_ago=3)
+    await _backdate_chore(sf, household_id, "Second chore", days_ago=2)
+
+    response = await async_client.get(f"/households/{household_id}/chores")
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["title"] for item in items] == [
+        "Third chore",
+        "Second chore",
+        "First chore",
+    ]
+    created_ats = [item["created_at"] for item in items]
+    assert created_ats == sorted(created_ats, reverse=True)
 
 
 @pytest.mark.asyncio

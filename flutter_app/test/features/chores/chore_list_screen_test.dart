@@ -31,6 +31,7 @@ ChoreModel _chore({
   String? assigneeId,
   String? assigneeName,
   DateTime? dueDate,
+  DateTime? createdAt,
 }) {
   return ChoreModel(
     id: id,
@@ -39,6 +40,7 @@ ChoreModel _chore({
     assigneeId: assigneeId,
     assigneeName: assigneeName,
     assignedManually: false,
+    createdAt: createdAt ?? DateTime(2026, 1, 1),
     dueDate: dueDate ?? DateTime(2026, 6, 25),
     status: status,
     title: title,
@@ -112,6 +114,7 @@ class _DataChoresNotifier extends ChoresNotifier {
       assigneeId: chore.assigneeId,
       assigneeName: chore.assigneeName,
       assignedManually: chore.assignedManually,
+      createdAt: chore.createdAt,
       dueDate: chore.dueDate,
       status: 'complete',
       completedAt: DateTime.now(),
@@ -137,6 +140,7 @@ class _DataChoresNotifier extends ChoresNotifier {
       assigneeId: chore.assigneeId,
       assigneeName: chore.assigneeName,
       assignedManually: chore.assignedManually,
+      createdAt: chore.createdAt,
       dueDate: chore.dueDate,
       status: 'dismissed',
       completedAt: DateTime.now(),
@@ -252,6 +256,45 @@ void main() {
       expect(find.text('Wash dishes'), findsOneWidget);
       expect(find.text('Vacuum living room'), findsOneWidget);
       expect(find.text('Mow the lawn'), findsOneWidget);
+    });
+
+    testWidgets('renders chores in provider order — newest-created first '
+        '(TASK-111)', (tester) async {
+      // The backend now returns chores ordered by created_at DESC; the list
+      // must render them exactly in that order without re-sorting. The first
+      // provided chore is the newest-created one (distinct createdAt values
+      // so the fixture order is unambiguous).
+      final chores = [
+        _chore(
+          id: 'c_newest',
+          title: 'Newest task',
+          createdAt: DateTime(2026, 1, 3),
+        ),
+        _chore(
+          id: 'c_middle',
+          title: 'Middle task',
+          createdAt: DateTime(2026, 1, 2),
+        ),
+        _chore(
+          id: 'c_oldest',
+          title: 'Oldest task',
+          createdAt: DateTime(2026, 1, 1),
+        ),
+      ];
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      final newestY =
+          tester.getTopLeft(find.byKey(const Key('chore_card_tap_c_newest'))).dy;
+      final middleY =
+          tester.getTopLeft(find.byKey(const Key('chore_card_tap_c_middle'))).dy;
+      final oldestY =
+          tester.getTopLeft(find.byKey(const Key('chore_card_tap_c_oldest'))).dy;
+
+      expect(newestY, lessThan(middleY));
+      expect(middleY, lessThan(oldestY));
     });
 
     // -------------------------------------------------------------------------
