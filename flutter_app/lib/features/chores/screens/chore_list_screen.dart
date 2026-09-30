@@ -17,6 +17,7 @@ import '../../household/providers/household_provider.dart';
 import '../../household/providers/members_provider.dart';
 import '../models/chore_model.dart';
 import '../providers/chores_provider.dart';
+import '../widgets/chore_calendar.dart';
 import '../widgets/chore_card.dart';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,10 @@ class ChoreListScreen extends ConsumerStatefulWidget {
 
 class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
   String _activeFilter = 'all';
+
+  /// TASK-117: List is the default view; Calendar is opt-in and replaces the
+  /// filter tabs + list area with the month grid.
+  bool _calendarMode = false;
 
   // ---------------------------------------------------------------------------
   // Filter logic
@@ -233,107 +238,133 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
                     0,
               ),
 
-              // Filter tabs
-              _ChoreFilterTabs(
-                activeFilter: _activeFilter,
-                onFilterChanged: (f) => setState(() => _activeFilter = f),
+              // List ↔ Calendar toggle (TASK-117). List is the DEFAULT
+              // view; Calendar replaces the filter tabs + list area below.
+              _ViewModeToggle(
+                calendarMode: _calendarMode,
+                onChanged: (v) => setState(() => _calendarMode = v),
               ),
 
-              // Chore list
-              Expanded(
-                child: choresAsync.when(
-                  loading: () =>
-                      const LoadingWidget(message: 'Loading chores...'),
-                  error: (error, _) => AppErrorWidget(
-                    error: error,
-                    onRetry: () => ref
-                        .read(
-                          choresNotifierProvider(widget.householdId).notifier,
-                        )
-                        .refresh(),
-                  ),
-                  data: (chores) {
-                    final filtered = _applyFilter(chores);
-                    return RefreshIndicator(
-                      color: _teal,
-                      onRefresh: () => ref
+              // Calendar view
+              if (_calendarMode)
+                Expanded(
+                  child: choresAsync.when(
+                    loading: () =>
+                        const LoadingWidget(message: 'Loading chores...'),
+                    error: (error, _) => AppErrorWidget(
+                      error: error,
+                      onRetry: () => ref
                           .read(
                             choresNotifierProvider(widget.householdId).notifier,
                           )
                           .refresh(),
-                      child: filtered.isEmpty
-                          ? _EmptyState(filter: _activeFilter)
-                          : ListView.builder(
-                              key: const Key('chore_list'),
-                              padding: const EdgeInsets.only(
-                                top: 8,
-                                bottom: 100,
-                              ),
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) {
-                                final chore = filtered[index];
-                                final isMyChore =
-                                    currentUserId != null &&
-                                    chore.assigneeId == currentUserId;
-                                final isActionable =
-                                    chore.status == 'pending' ||
-                                    chore.status == 'overdue';
-                                return ChoreCard(
-                                  key: Key('chore_card_${chore.id}'),
-                                  chore: chore,
-                                  isAdmin: isAdmin,
-                                  members: members,
-                                  onDeleteSeries: isAdmin
-                                      ? () => _confirmDelete(
-                                          context,
-                                          chore.definitionId,
-                                          chore.title,
-                                        )
-                                      : null,
-                                  onReassign: isAdmin
-                                      ? (memberId) =>
-                                            _reassignChore(chore, memberId)
-                                      : null,
-                                  onCompleteTap:
-                                      isMyChore &&
-                                          chore.status != 'complete' &&
-                                          chore.status != 'dismissed'
-                                      ? () => confirmCompleteChore(
-                                          context: context,
-                                          ref: ref,
-                                          householdId: widget.householdId,
-                                          chore: chore,
-                                        )
-                                      : null,
-                                  // Assignees dismiss their own chores; admins
-                                  // may dismiss any chore (TASK-104).
-                                  onDismiss:
-                                      isActionable && (isMyChore || isAdmin)
-                                      ? () => confirmDismissChore(
-                                          context: context,
-                                          ref: ref,
-                                          householdId: widget.householdId,
-                                          chore: chore,
-                                        )
-                                      : null,
-                                  onMarkDoneForAssignee:
-                                      isAdmin &&
-                                          isActionable &&
-                                          chore.assigneeId != null
-                                      ? () => confirmCompleteChore(
-                                          context: context,
-                                          ref: ref,
-                                          householdId: widget.householdId,
-                                          chore: chore,
-                                        )
-                                      : null,
-                                );
-                              },
-                            ),
-                    );
-                  },
+                    ),
+                    data: (chores) => ChoreCalendar(chores: chores),
+                  ),
+                )
+              else ...[
+                // Filter tabs
+                _ChoreFilterTabs(
+                  activeFilter: _activeFilter,
+                  onFilterChanged: (f) => setState(() => _activeFilter = f),
                 ),
-              ),
+
+                // Chore list
+                Expanded(
+                  child: choresAsync.when(
+                    loading: () =>
+                        const LoadingWidget(message: 'Loading chores...'),
+                    error: (error, _) => AppErrorWidget(
+                      error: error,
+                      onRetry: () => ref
+                          .read(
+                            choresNotifierProvider(widget.householdId).notifier,
+                          )
+                          .refresh(),
+                    ),
+                    data: (chores) {
+                      final filtered = _applyFilter(chores);
+                      return RefreshIndicator(
+                        color: _teal,
+                        onRefresh: () => ref
+                            .read(
+                              choresNotifierProvider(widget.householdId).notifier,
+                            )
+                            .refresh(),
+                        child: filtered.isEmpty
+                            ? _EmptyState(filter: _activeFilter)
+                            : ListView.builder(
+                                key: const Key('chore_list'),
+                                padding: const EdgeInsets.only(
+                                  top: 8,
+                                  bottom: 100,
+                                ),
+                                itemCount: filtered.length,
+                                itemBuilder: (context, index) {
+                                  final chore = filtered[index];
+                                  final isMyChore =
+                                      currentUserId != null &&
+                                      chore.assigneeId == currentUserId;
+                                  final isActionable =
+                                      chore.status == 'pending' ||
+                                      chore.status == 'overdue';
+                                  return ChoreCard(
+                                    key: Key('chore_card_${chore.id}'),
+                                    chore: chore,
+                                    isAdmin: isAdmin,
+                                    members: members,
+                                    onDeleteSeries: isAdmin
+                                        ? () => _confirmDelete(
+                                            context,
+                                            chore.definitionId,
+                                            chore.title,
+                                          )
+                                        : null,
+                                    onReassign: isAdmin
+                                        ? (memberId) =>
+                                              _reassignChore(chore, memberId)
+                                        : null,
+                                    onCompleteTap:
+                                        isMyChore &&
+                                            chore.status != 'complete' &&
+                                            chore.status != 'dismissed'
+                                        ? () => confirmCompleteChore(
+                                            context: context,
+                                            ref: ref,
+                                            householdId: widget.householdId,
+                                            chore: chore,
+                                          )
+                                        : null,
+                                    // Assignees dismiss their own chores; admins
+                                    // may dismiss any chore (TASK-104).
+                                    onDismiss:
+                                        isActionable && (isMyChore || isAdmin)
+                                        ? () => confirmDismissChore(
+                                            context: context,
+                                            ref: ref,
+                                            householdId: widget.householdId,
+                                            chore: chore,
+                                          )
+                                        : null,
+                                    onMarkDoneForAssignee:
+                                        isAdmin &&
+                                            isActionable &&
+                                            chore.assigneeId != null
+                                        ? () => confirmCompleteChore(
+                                            context: context,
+                                            ref: ref,
+                                            householdId: widget.householdId,
+                                            chore: chore,
+                                          )
+                                        : null,
+                                  );
+                                },
+                              ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -355,6 +386,81 @@ class _ChoreListScreenState extends ConsumerState<ChoreListScreen> {
           householdId: widget.householdId,
           currentIndex: 0,
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// List / Calendar view toggle (TASK-117)
+// ---------------------------------------------------------------------------
+
+class _ViewModeToggle extends StatelessWidget {
+  const _ViewModeToggle({required this.calendarMode, required this.onChanged});
+
+  final bool calendarMode;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    // Keyed on the AccessibleTap (not the inner Container) so tests can tap
+    // the segment reliably even when the visual pill is smaller than the
+    // minimum tap target. Each segment is Flexible + a scale-down label so
+    // the row can never overflow, at any text scale.
+    Widget segment({
+      required Key key,
+      required String label,
+      required bool active,
+      required VoidCallback onTap,
+    }) {
+      return Flexible(
+        child: AccessibleTap(
+          key: key,
+          onTap: onTap,
+          label: '$label view',
+          selected: active,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: active ? _teal : const Color(0xFFF1F5F5),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: active ? Colors.white : _secondaryText,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Row(
+        children: [
+          segment(
+            key: const Key('view_mode_list'),
+            label: 'List',
+            active: !calendarMode,
+            onTap: () => onChanged(false),
+          ),
+          const SizedBox(width: 8),
+          segment(
+            key: const Key('view_mode_calendar'),
+            label: 'Calendar',
+            active: calendarMode,
+            onTap: () => onChanged(true),
+          ),
+        ],
       ),
     );
   }

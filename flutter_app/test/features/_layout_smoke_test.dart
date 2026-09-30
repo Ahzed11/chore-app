@@ -6,6 +6,7 @@ import 'package:chore_app/features/chores/providers/chores_provider.dart';
 import 'package:chore_app/features/chores/screens/chore_list_screen.dart';
 import 'package:chore_app/features/chores/screens/create_chore_screen.dart';
 import 'package:chore_app/features/chores/screens/my_chores_screen.dart';
+import 'package:chore_app/features/chores/widgets/chore_calendar.dart';
 import 'package:chore_app/features/groceries/models/grocery_item_model.dart';
 import 'package:chore_app/features/groceries/providers/groceries_provider.dart';
 import 'package:chore_app/features/groceries/screens/grocery_list_screen.dart';
@@ -197,6 +198,15 @@ Future<void> _pumpAndExpectClean(WidgetTester tester, Widget widget) async {
   expect(tester.takeException(), isNull);
 }
 
+/// Pumps [widget] and settles WITHOUT asserting — for surfaces that carry a
+/// known pre-existing overflow (here: the filter-tab row at 390px in the test
+/// font, see the TASK-117 calendar notes below). The caller is responsible for
+/// draining that exception before asserting on anything else.
+Future<void> _pumpQuiet(WidgetTester tester, Widget widget) async {
+  await tester.pumpWidget(widget);
+  await tester.pumpAndSettle();
+}
+
 /// Realistic phone portrait surface (logical 390x844 @3x) — the size where
 /// bottom-sheet overflow bugs actually bite (the TASK-109 repro).
 void _phoneView(WidgetTester tester) {
@@ -313,6 +323,168 @@ void main() {
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
         }
+      });
+
+      // ---------------------------------------------------------------------
+      // TASK-117 calendar view
+      // ---------------------------------------------------------------------
+
+      /// Chores spread across the current month plus five chores on the last
+      /// day (exercises the 3-dots + "+N" overflow marker).
+      List<ChoreModel> monthOfChores() {
+        final today = DateTime.now();
+        final lastDay =
+            DateUtils.getDaysInMonth(today.year, today.month);
+        return [
+          for (var i = 1; i <= 28; i++)
+            _chore(
+              id: 'c$i',
+              title: 'Chore number $i',
+              status: i % 4 == 0
+                  ? 'complete'
+                  : i % 4 == 1
+                      ? 'overdue'
+                      : 'pending',
+              dueDate: DateTime(today.year, today.month, i),
+            ),
+          for (var i = 0; i < 5; i++)
+            _chore(
+              id: 'last$i',
+              title: 'End of month $i',
+              status: 'pending',
+              dueDate: DateTime(today.year, today.month, lastDay),
+            ),
+        ];
+      }
+
+      testWidgets('calendar view lays out cleanly on a phone', (tester) async {
+        _phoneView(tester);
+        await _pumpQuiet(tester, screen(monthOfChores()));
+
+        // Pre-existing, NOT introduced by TASK-117: the filter-tab row
+        // ("All Pending Overdue Done") overflows at 390px in the test font
+        // (`FlutterTest` advances ~1em per glyph, ~2x wider than Roboto).
+        // Verified identical on `main` (61px @1.0, 149px @1.3 text scale);
+        // real Roboto at 390dp fits (~318px of the 342px available). Drain it
+        // so the assertions below cover the CALENDAR, which is this task's
+        // scope. Fixing the tabs is a separate, out-of-scope change.
+        tester.takeException();
+
+        await tester.tap(find.byKey(const Key('view_mode_calendar')));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Mon'), findsOneWidget);
+        // A day with 5 chores renders 3 dots + "+2", never an overflow.
+        expect(find.text('+2'), findsOneWidget);
+
+        // The day sheet is the other overflow risk (DraggableScrollableSheet).
+        await tester.tap(
+          find.byKey(Key('calendar_day_${DateTime.now().year}_'
+              '${DateTime.now().month}_${DateTime.now().day}')),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // Drag it down toward its minimum extent and back up. Keep the drags
+        // modest: a large downward fling dismisses the modal sheet entirely
+        // (initial extent is 0.5 of the screen).
+        final sheetTitle = find.byKey(const Key('calendar_day_sheet_title'));
+        await tester.drag(sheetTitle, const Offset(0, 120));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(sheetTitle, findsOneWidget);
+        await tester.drag(sheetTitle, const Offset(0, -120));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(sheetTitle, findsOneWidget);
+      });
+
+      testWidgets('calendar view survives LARGE TEXT on a phone (TASK-117 grid '
+          'overflow guard)', (tester) async {
+        _phoneView(tester);
+        tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+        addTearDown(
+          tester.platformDispatcher.clearTextScaleFactorTestValue,
+        );
+        await _pumpQuiet(tester, screen(monthOfChores()));
+
+        // Pre-existing filter-tab overflow at 390px in the test font — see the
+        // note in the test above. Drained, not asserted away.
+        tester.takeException();
+
+        await tester.tap(find.byKey(const Key('view_mode_calendar')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // Walk a full year of month grids — 4, 5 and 6-row months are the
+        // layout danger zone for a fixed `Expanded`-per-week grid.
+        for (var i = 0; i < 12; i++) {
+          await tester.tap(find.byKey(const Key('calendar_prev_month')));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        }
+        for (var i = 0; i < 12; i++) {
+          await tester.tap(find.byKey(const Key('calendar_next_month')));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        }
+
+        // Back to List with large text still active: the list must be restored
+        // (its own layout is asserted exception-free by the 800x600 variants
+        // above; at 390px the pre-existing tab overflow above applies again).
+        await tester.tap(find.byKey(const Key('view_mode_list')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('chore_list')), findsOneWidget);
+        expect(find.byType(ChoreCalendar), findsNothing);
+        tester.takeException();
+      });
+
+      testWidgets(
+          'calendar view survives LANDSCAPE (very short week rows) — the grid '
+          'scales instead of overflowing', (tester) async {
+        // Landscape phone: the header + toggle + weekday row eat most of the
+        // 390px height, leaving the grid ~60-110px for 5-6 week rows. A
+        // fixed-size day cell overflows there (measured 36px on the first
+        // implementation) — the scale-down FittedBox prevents it.
+        tester.view.physicalSize = const Size(844 * 2, 390 * 2);
+        tester.view.devicePixelRatio = 2.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        // Wide screen: the filter tabs fit, so list mode is asserted clean too.
+        await _pumpAndExpectClean(tester, screen(monthOfChores()));
+
+        await tester.tap(find.byKey(const Key('view_mode_calendar')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('Mon'), findsOneWidget);
+
+        for (var i = 0; i < 6; i++) {
+          await tester.tap(find.byKey(const Key('calendar_prev_month')));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        }
+        await tester.tap(find.byKey(const Key('calendar_next_month')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // The day sheet must still open and lay out in landscape. Return to the
+        // current month first (the walk above left the grid 5 months back).
+        await tester.tap(find.byKey(const Key('calendar_today')));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(
+          find.byKey(Key('calendar_day_${DateTime.now().year}_'
+              '${DateTime.now().month}_${DateTime.now().day}')),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('calendar_day_sheet_title')),
+          findsOneWidget,
+        );
       });
     });
 

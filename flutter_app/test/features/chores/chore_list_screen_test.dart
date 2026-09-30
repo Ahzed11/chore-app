@@ -4,12 +4,14 @@ import 'package:chore_app/features/auth/providers/current_user_provider.dart';
 import 'package:chore_app/features/chores/models/chore_model.dart';
 import 'package:chore_app/features/chores/providers/chores_provider.dart';
 import 'package:chore_app/features/chores/screens/chore_list_screen.dart';
+import 'package:chore_app/features/chores/widgets/chore_calendar.dart';
 import 'package:chore_app/features/chores/widgets/chore_card.dart';
 import 'package:chore_app/features/household/models/household_model.dart';
 import 'package:chore_app/features/household/models/member_model.dart';
 import 'package:chore_app/features/household/providers/household_provider.dart';
 import 'package:chore_app/features/household/providers/members_provider.dart';
 import 'package:chore_app/shared/theme/app_theme.dart';
+import 'package:chore_app/shared/widgets/accessible_tap.dart';
 import 'package:chore_app/shared/widgets/loading_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -817,6 +819,106 @@ void main() {
       expect(find.byKey(const Key('mark_done_for_menu_item')), findsNothing);
       expect(find.byKey(const Key('dismiss_menu_item')), findsNothing);
       expect(find.text('Dismiss (no points)'), findsNothing);
+    });
+
+    // -----------------------------------------------------------------------
+    // List ↔ Calendar view toggle (TASK-117)
+    // -----------------------------------------------------------------------
+
+    testWidgets('List/Calendar toggle is present with List active by default',
+        (tester) async {
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier([])),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('view_mode_list')), findsOneWidget);
+      expect(find.byKey(const Key('view_mode_calendar')), findsOneWidget);
+
+      // List is the default view: filter tabs + the list are rendered and the
+      // calendar is absent.
+      expect(find.text('All'), findsOneWidget);
+      expect(find.byType(ChoreCalendar), findsNothing);
+
+      final listSegment = tester.widget<AccessibleTap>(
+        find.byKey(const Key('view_mode_list')),
+      );
+      final calendarSegment = tester.widget<AccessibleTap>(
+        find.byKey(const Key('view_mode_calendar')),
+      );
+      expect(listSegment.selected, isTrue);
+      expect(calendarSegment.selected, isFalse);
+    });
+
+    testWidgets('tapping Calendar shows the calendar and hides the filter tabs',
+        (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Pending chore',
+          status: 'pending',
+          dueDate: DateTime(2027, 12, 31),
+        ),
+      ];
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('view_mode_calendar')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ChoreCalendar), findsOneWidget);
+      // Filter tabs and the card list are replaced by the grid.
+      expect(find.text('All'), findsNothing);
+      expect(find.text('Pending'), findsNothing);
+      expect(find.byType(ChoreCard), findsNothing);
+      expect(find.text('Pending chore'), findsNothing);
+      // The weekday header proves the grid actually rendered.
+      expect(find.text('Mon'), findsOneWidget);
+    });
+
+    testWidgets('tapping List restores the filter tabs and the chore list',
+        (tester) async {
+      final chores = [
+        _chore(
+          id: 'c1',
+          title: 'Pending chore',
+          status: 'pending',
+          dueDate: DateTime(2027, 12, 31),
+        ),
+      ];
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _DataChoresNotifier(chores)),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('view_mode_calendar')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('view_mode_list')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ChoreCalendar), findsNothing);
+      expect(find.text('All'), findsOneWidget);
+      expect(find.text('Pending'), findsOneWidget);
+      expect(find.byType(ChoreCard), findsOneWidget);
+      expect(find.text('Pending chore'), findsOneWidget);
+    });
+
+    testWidgets('calendar view renders the error state for a failed provider',
+        (tester) async {
+      await tester.pumpWidget(
+        _buildScreen(choresNotifier: () => _ErrorChoresNotifier('Server error')),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('view_mode_calendar')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Something went wrong'), findsOneWidget);
+      expect(find.byType(ChoreCalendar), findsNothing);
+      // Still in calendar mode — the filter tabs stay hidden.
+      expect(find.text('All'), findsNothing);
     });
   });
 }
