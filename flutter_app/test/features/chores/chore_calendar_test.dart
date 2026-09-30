@@ -215,7 +215,6 @@ void main() {
         find.text('Nothing done or due on this day.'),
         findsOneWidget,
       );
-      expect(find.text('No chores on this date.'), findsOneWidget);
       expect(find.byType(ChoreCard), findsNothing);
     });
 
@@ -267,17 +266,19 @@ void main() {
       await tester.pumpWidget(_app([done, pending]));
       await tester.pumpAndSettle();
 
-      // TalkBack/VoiceOver must announce the full date and the day's load —
+      // TalkBack/VoiceOver must announce the full date (year included — a
+      // "15 September" cell is ambiguous between years) and the day's load —
       // the visible content is only a bare number plus dots.
       expect(
         find.bySemanticsLabel(
-          RegExp('^${DateFormat('EEEE, d MMMM').format(today)}, 2 chores\$'),
+          RegExp('^${DateFormat('EEEE, d MMMM yyyy').format(today)}, '
+              '2 chores, today\$'),
         ),
         findsOneWidget,
       );
       expect(
         find.bySemanticsLabel(
-          RegExp('^${DateFormat('EEEE, d MMMM').format(emptyDay)}, '
+          RegExp('^${DateFormat('EEEE, d MMMM yyyy').format(emptyDay)}, '
               'no chores\$'),
         ),
         findsOneWidget,

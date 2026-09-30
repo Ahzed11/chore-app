@@ -36,7 +36,10 @@ class _ChoreCalendarState extends State<ChoreCalendar> {
   }
 
   void _shiftMonth(int delta) => setState(() {
-    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + delta);
+    // Day pinned to 1 so month arithmetic can never drift (e.g. Jan 31 + 1 →
+    // Mar 3). The day is always 1 in practice, but this makes the invariant
+    // explicit and future-proof.
+    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + delta, 1);
   });
 
   @override
@@ -120,8 +123,10 @@ class _ChoreCalendarState extends State<ChoreCalendar> {
       key: Key('calendar_day_${day.year}_${day.month}_${day.day}'),
       onTap: () => _showDaySheet(day, chores),
       // The grid is otherwise opaque to screen readers (a bare number);
-      // announce the full date plus how many chores land on it.
-      label: '${DateFormat('EEEE, d MMMM').format(day)}, $countLabel',
+      // announce the full date (including the year — otherwise Dec 2025 and
+      // Dec 2026 cells are indistinguishable) plus how many chores land on it.
+      label: '${DateFormat('EEEE, d MMMM yyyy').format(day)}, '
+          '$countLabel${isToday ? ', today' : ''}',
       borderRadius: BorderRadius.circular(10),
       // The cell content is wrapped in a scale-down FittedBox: the grid hands
       // each week a share of whatever height is left, and on a landscape phone
@@ -175,7 +180,16 @@ class _ChoreCalendarState extends State<ChoreCalendar> {
                 style: const TextStyle(fontSize: 14, color: _secondaryText)),
             const SizedBox(height: 12),
             if (chores.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: Text('No chores on this date.', style: TextStyle(color: _secondaryText))))
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Icon(
+                    Icons.event_busy_rounded,
+                    size: 48,
+                    color: _secondaryText,
+                  ),
+                ),
+              )
             else
               ...chores.map((c) => ChoreCard(chore: c)), // read-only: no mutation callbacks
           ],

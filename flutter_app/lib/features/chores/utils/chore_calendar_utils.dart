@@ -18,9 +18,15 @@ DateTime? calendarDateFor(ChoreModel chore) {
       if (at == null) return null; // no completion time → cannot place on a day
       final local = at.toLocal();
       return DateTime(local.year, local.month, local.day);
-    default: // pending, overdue
+    case 'pending':
+    case 'overdue':
       final d = chore.dueDate;
       return DateTime(d.year, d.month, d.day);
+    default:
+      // Unknown/future status — fail closed (drop from the calendar) rather
+      // than silently placing it on its due date, mirroring ChoreModel's
+      // explicit statusColor split.
+      return null;
   }
 }
 
