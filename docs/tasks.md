@@ -8,7 +8,7 @@ Each task is designed to be self-contained. A developer agent can implement it b
 reading only this task description plus the referenced requirements sections.
 Dependency chains are explicit.
 
-**116 tasks complete, 0 pending.** Completed task bodies
+**116 tasks complete, 1 pending (TASK-117).** Completed task bodies
 live in `docs/archive/tasks-completed.md`; the ledger below is the authoritative
 history. TASK-105 (signing-key drift runbook) is retained inline below as an
 operational reference rather than trimmed to the archive. New work: append
@@ -66,6 +66,7 @@ acceptance criteria, ledger row).
 | TASK-111 | ✅ Done 2026-08-18 — chore lists sort newest-first: backend `list_chores` ORDER BY `(created_at DESC, id DESC)` (id keeps offset pagination deterministic on ties); `created_at` added to `ChoreInstanceResponse`; Flutter `ChoreModel.createdAt` + optimistic paths; My Chores pending sorts createdAt DESC with id tiebreaker (overdue pinned, Done unchanged); All Chores preserves server order. Deterministic backdate-based backend tests (+ rowcount guard); All Chores/My Chores ordering widget tests (distinct createdAt fixtures); E2E asserts newest chore on top. Adversarial review APPROVE — actionable findings applied. Suite 254 @ 97.4% + Flutter 248 green; pubspec 1.0.6+10006; fdroid index rebuilt after merge — archived. |
 | TASK-115 | ✅ Done 2026-08-18 — calendar widgets always start the week on Monday: MaterialApp pins en_GB (firstDayOfWeekIndex == 1) via shared locale constants (`lib/core/config/app_locale.dart`) used by both the app and tests; `flutter_localizations` added, `intl` → ^0.20.2. Widget tests assert the picker's weekday header starts M T W T F S S (create + edit; sanity-verified to fail under en_US) and the real ChoreApp's MaterialApp carries the pinned locale. Adversarial review APPROVE — 3 of 4 findings applied (seam test, comment accuracy, import scope; header-brittleness already guarded). Suite 250 green, analyzer clean, E2E green; pubspec 1.0.7+10007; fdroid index rebuilt after merge — archived. |
 | TASK-116 | ✅ Done 2026-08-18 — All Chores All tab pins overdue on top: `_applyFilter` re-sorts the All tab (overdue via the same isOverdue definition as My Chores — status 'overdue' OR pending past due — most-overdue first with id tiebreaker, then newest-first createdAt DESC + id tiebreaker); other tabs keep server order, backend unchanged. New scrambled-list widget test (Y-coordinate assertions) + updated TASK-111 newest-first test with far-future fixture dates (isOverdue uses the real clock). Adversarial review APPROVE — all 5 findings addressed (id tiebreaker, 2029 fixture dates, comment, docs caveat; midnight-crossing gap accepted as pre-existing). Suite 251 green, analyzer clean, E2E green; pubspec 1.0.8+10008; fdroid index rebuilt after merge — archived. |
+| TASK-117 | ⏳ Pending (2026-09-30) — All Chores calendar view: List↔Calendar toggle, Monday-first month grid, tap-a-day sheet. See body below. |
 
 ---
 
@@ -152,3 +153,363 @@ closed without a keystore (TASK-099).
   message naming the offending APK/version and the expected cert.
 
 ---
+
+## TASK-117: Flutter — All Chores calendar view
+
+**Domain**: Flutter (All Chores screen). Backend unchanged.
+**Depends on**: TASK-115 (Monday-first calendar locale), TASK-111/TASK-116 (`createdAt` ordering — the calendar is additive and independent of list ordering).
+**Branch**: `feat/all-chores-calendar`
+
+**What & why**: The All Chores screen is a flat, filterable list; it's hard to see
+at a glance what was completed when, or what's coming up. Add a Calendar view — a
+List ↔ Calendar toggle — that lays chores out on a month grid. Done chores
+(complete/dismissed) appear on the day they were completed; pending/overdue chores
+appear on their due date. Tapping a day opens a bottom sheet listing that day's
+chores. This is a **client-only** feature: `ChoreModel` already carries
+`completedAt`, `dueDate`, `status`, and `createdAt`, all fetched by the existing
+`choresNotifierProvider` (paginated, up to 1000 instances) — **no new endpoint,
+schema, or migration**.
+
+**Product decisions (agreed with user 2026-09-30)**:
+
+- **Day semantics** (combined): complete/dismissed → completion date (converted to
+  LOCAL); pending/overdue → due date. `cancelled` chores never appear.
+- **Presentation**: a List/Calendar toggle. List remains the DEFAULT view (existing
+  list + filter tabs unchanged). Calendar replaces the filter-tab + list area
+  (filter tabs hidden in calendar mode).
+- **Calendar widget**: custom month grid — **no third-party dependency**.
+  Rationale: the repo pins `intl ^0.20.2` (TASK-115), which conflicts with
+  `table_calendar`'s older `intl` constraint; a hand-rolled grid built on Flutter's
+  `DateUtils` avoids the conflict and matches the teal theme exactly. Monday-first
+  is hard-coded (Mon…Sun) — consistent with TASK-115 and immune to locale drift.
+
+**Known limitations (pre-existing, out of scope)**: `list_chores` only returns
+active definitions, so completed instances of a soft-deleted series vanish from
+both the list and the calendar. The calendar groups over whatever the provider
+returns (1000-instance pagination cap), so very old completions may be truncated.
+
+**How to implement**:
+
+1. **Bump the app version** in `flutter_app/pubspec.yaml` FIRST on the feature
+   branch: `1.0.8+10008` → `1.0.9+10009` (patch; CODE = MAJOR*10000+MINOR*100+PATCH).
+   The release tag comes from versionName and a duplicate tag silently skips CI
+   release (TASK-095).
+
+2. **Grouping helper (pure, unit-testable)** — new file
+   `flutter_app/lib/features/chores/utils/chore_calendar_utils.dart`:
+
+   ```dart
+   import '../models/chore_model.dart';
+
+   /// The calendar day a chore appears under (combined semantics — agreed 2026-09-30):
+   /// - complete / dismissed → the LOCAL date it was completed/dismissed;
+   /// - pending / overdue    → its due date;
+   /// - cancelled            → null (never shown on the calendar).
+   ///
+   /// `completedAt` arrives from the server as a UTC ISO-8601 timestamp, so
+   /// `.toLocal()` is REQUIRED before extracting year/month/day — otherwise a
+   /// chore finished near midnight lands on the wrong calendar day.
+   DateTime? calendarDateFor(ChoreModel chore) {
+     switch (chore.status) {
+       case 'cancelled':
+         return null;
+       case 'complete':
+       case 'dismissed':
+         final at = chore.completedAt;
+         if (at == null) return null; // no completion time → cannot place on a day
+         final local = at.toLocal();
+         return DateTime(local.year, local.month, local.day);
+       default: // pending, overdue
+         final d = chore.dueDate;
+         return DateTime(d.year, d.month, d.day);
+     }
+   }
+
+   /// Groups chores by their calendar day (date-only, LOCAL keys). Cancelled
+   /// chores and chores without a placeable date are dropped.
+   Map<DateTime, List<ChoreModel>> groupChoresByDay(List<ChoreModel> chores) {
+     final grouped = <DateTime, List<ChoreModel>>{};
+     for (final chore in chores) {
+       final day = calendarDateFor(chore);
+       if (day == null) continue;
+       grouped.putIfAbsent(day, () => <ChoreModel>[]).add(chore);
+     }
+     return grouped;
+   }
+   ```
+
+3. **Calendar widget** — new file
+   `flutter_app/lib/features/chores/widgets/chore_calendar.dart` (month grid + day
+   sheet). Key points:
+   - `_focusedMonth` state = the displayed month (day forced to 1); `initState`
+     sets it to the current month.
+   - Recompute `groupChoresByDay(widget.chores)` **inside build()** (no cached map,
+     no `didUpdateWidget`) — the provider replaces the list wholesale on every
+     update, so recomputing is always correct and avoids a stale-cache bug class.
+   - Weekday header hard-coded `['Mon','Tue','Wed','Thu','Fri','Sat','Sun']`.
+   - Grid math: `firstOfMonth = DateTime(y, m, 1)`;
+     `leadingBlanks = (firstOfMonth.weekday - DateTime.monday) % 7` (Mon=0);
+     `weeks = ((leadingBlanks + daysInMonth) / 7).ceil()`; cells are
+     `Expanded` children of per-week `Row`s (fixed layout, no scroll).
+   - Each day cell: `InkWell` keyed `calendar_day_<y>_<m>_<d>`; a 34×34 circle for
+     the day number (teal filled if today, else thin border); wrap the number text
+     in `FittedBox(fit: BoxFit.scaleDown)` so large text scales don't overflow;
+     below it a fixed 8px-tall marker row of up to 3 status dots (reuse
+     `chore.statusColor`) plus a `+N` overflow label.
+   - Day tap → `_showDaySheet(day, chores)`.
+
+   ```dart
+   import 'package:flutter/material.dart';
+   import 'package:intl/intl.dart';
+
+   import '../models/chore_model.dart';
+   import '../utils/chore_calendar_utils.dart';
+   import 'chore_card.dart';
+
+   const _teal = Color(0xFF0D9488);
+   const _darkText = Color(0xFF0F2E2C);
+   const _secondaryText = Color(0xFF7F9794);
+   const _borderLight = Color(0xFFE6EDEC);
+
+   const List<String> _weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+   class ChoreCalendar extends StatefulWidget {
+     const ChoreCalendar({super.key, required this.chores});
+     final List<ChoreModel> chores;
+     @override
+     State<ChoreCalendar> createState() => _ChoreCalendarState();
+   }
+
+   class _ChoreCalendarState extends State<ChoreCalendar> {
+     late DateTime _focusedMonth; // day forced to 1
+     DateTime get _today => DateUtils.dateOnly(DateTime.now());
+
+     @override
+     void initState() {
+       super.initState();
+       _focusedMonth = DateTime(_today.year, _today.month);
+     }
+
+     void _shiftMonth(int delta) => setState(() {
+       _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + delta);
+     });
+
+     @override
+     Widget build(BuildContext context) {
+       final byDay = groupChoresByDay(widget.chores);
+       final firstOfMonth = DateTime(_focusedMonth.year, _focusedMonth.month, 1);
+       final daysInMonth = DateUtils.getDaysInMonth(_focusedMonth.year, _focusedMonth.month);
+       final leadingBlanks = (firstOfMonth.weekday - DateTime.monday) % 7;
+       final weeks = ((leadingBlanks + daysInMonth) / 7).ceil();
+
+       return Column(children: [
+         Padding(
+           padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
+           child: Row(children: [
+             Text(DateFormat('MMMM yyyy').format(_focusedMonth),
+                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _darkText)),
+             const Spacer(),
+             IconButton(key: const Key('calendar_prev_month'), icon: const Icon(Icons.chevron_left_rounded), onPressed: () => _shiftMonth(-1)),
+             TextButton(key: const Key('calendar_today'),
+                 onPressed: () => setState(() => _focusedMonth = DateTime(_today.year, _today.month)),
+                 child: const Text('Today')),
+             IconButton(key: const Key('calendar_next_month'), icon: const Icon(Icons.chevron_right_rounded), onPressed: () => _shiftMonth(1)),
+           ]),
+         ),
+         Padding(
+           padding: const EdgeInsets.symmetric(horizontal: 12),
+           child: Row(children: [
+             for (final l in _weekdayLabels)
+               Expanded(child: Center(child: Text(l, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _secondaryText)))),
+           ]),
+         ),
+         const SizedBox(height: 4),
+         Expanded(
+           child: Padding(
+             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+             child: Column(children: [
+               for (var week = 0; week < weeks; week++)
+                 Expanded(child: Row(children: [
+                   for (var col = 0; col < 7; col++)
+                     Expanded(child: _dayCell(week, col, leadingBlanks, daysInMonth, byDay)),
+                 ])),
+             ]),
+           ),
+         ),
+       ]);
+     }
+
+     Widget _dayCell(int week, int col, int leadingBlanks, int daysInMonth, Map<DateTime, List<ChoreModel>> byDay) {
+       final dayNum = week * 7 + col - leadingBlanks + 1;
+       if (dayNum < 1 || dayNum > daysInMonth) return const SizedBox.shrink();
+       final day = DateTime(_focusedMonth.year, _focusedMonth.month, dayNum);
+       final chores = byDay[day] ?? const <ChoreModel>[];
+       final isToday = DateUtils.isSameDay(day, _today);
+       return InkWell(
+         key: Key('calendar_day_${day.year}_${day.month}_${day.day}'),
+         onTap: () => _showDaySheet(day, chores),
+         borderRadius: BorderRadius.circular(10),
+         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+           Container(
+             width: 34, height: 34, alignment: Alignment.center,
+             decoration: BoxDecoration(shape: BoxShape.circle, color: isToday ? _teal : Colors.transparent, border: isToday ? null : Border.all(color: _borderLight)),
+             child: FittedBox(fit: BoxFit.scaleDown, child: Padding(
+               padding: const EdgeInsets.all(3),
+               child: Text('${day.day}', style: TextStyle(fontSize: 13, fontWeight: isToday ? FontWeight.w700 : FontWeight.w500, color: isToday ? Colors.white : _darkText)),
+             )),
+           ),
+           const SizedBox(height: 4),
+           SizedBox(height: 8, child: chores.isEmpty ? null : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+             for (var i = 0; i < chores.length && i < 3; i++)
+               Container(width: 5, height: 5, margin: const EdgeInsets.symmetric(horizontal: 1), decoration: BoxDecoration(shape: BoxShape.circle, color: chores[i].statusColor)),
+             if (chores.length > 3) Text('+${chores.length - 3}', style: const TextStyle(fontSize: 8, color: _secondaryText)),
+           ])),
+         ]),
+       );
+     }
+
+     void _showDaySheet(DateTime day, List<ChoreModel> chores) {
+       showModalBottomSheet<void>(
+         context: context, isScrollControlled: true, useSafeArea: true,
+         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+         builder: (_) => DraggableScrollableSheet(
+           expand: false, initialChildSize: 0.5, minChildSize: 0.2, maxChildSize: 0.85,
+           builder: (context, scrollController) => ListView(
+             controller: scrollController,
+             padding: EdgeInsets.fromLTRB(16, 16, 16, 12 + MediaQuery.paddingOf(context).bottom),
+             children: [
+               Text(DateFormat('EEEE, d MMMM').format(day), key: const Key('calendar_day_sheet_title'),
+                   style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _darkText)),
+               const SizedBox(height: 4),
+               Text(chores.isEmpty ? 'Nothing done or due on this day.' : '${chores.length} chore${chores.length == 1 ? '' : 's'}',
+                   style: const TextStyle(fontSize: 14, color: _secondaryText)),
+               const SizedBox(height: 12),
+               if (chores.isEmpty)
+                 const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: Text('No chores on this date.', style: TextStyle(color: _secondaryText))))
+               else
+                 ...chores.map((c) => ChoreCard(chore: c)), // read-only: no mutation callbacks
+             ],
+           ),
+         ),
+       );
+     }
+   }
+   ```
+
+   (ChoreCard's own horizontal margin adds ~16px inside the sheet's 16px padding —
+   acceptable; if it looks cramped, wrap cards in a `Padding(horizontal: 0)` or accept it.)
+
+4. **Wire the toggle into the screen** — edit
+   `flutter_app/lib/features/chores/screens/chore_list_screen.dart`:
+
+   - Add state field `bool _calendarMode = false;` and import
+     `../widgets/chore_calendar.dart`.
+   - In `build()`, replace the `Column` children so the toggle sits between the
+     header and the filter tabs, and the calendar/list branch is conditional:
+
+   ```dart
+   children: [
+     _ChoreListHeader(/* unchanged */),
+     _ViewModeToggle(
+       calendarMode: _calendarMode,
+       onChanged: (v) => setState(() => _calendarMode = v),
+     ),
+     if (_calendarMode)
+       Expanded(
+         child: choresAsync.when(
+           loading: () => const LoadingWidget(message: 'Loading chores...'),
+           error: (error, _) => AppErrorWidget(
+             error: error,
+             onRetry: () => ref.read(choresNotifierProvider(widget.householdId).notifier).refresh(),
+           ),
+           data: (chores) => ChoreCalendar(chores: chores),
+         ),
+       )
+     else ...[
+       _ChoreFilterTabs(/* unchanged */),
+       Expanded(child: choresAsync.when(/* existing list rendering, unchanged */)),
+     ],
+   ],
+   ```
+
+   - Add the `_ViewModeToggle` widget (key on the `AccessibleTap` for reliable
+     tapping in tests):
+
+   ```dart
+   class _ViewModeToggle extends StatelessWidget {
+     const _ViewModeToggle({required this.calendarMode, required this.onChanged});
+     final bool calendarMode;
+     final ValueChanged<bool> onChanged;
+
+     @override
+     Widget build(BuildContext context) {
+       Widget segment({required Key key, required String label, required bool active, required VoidCallback onTap}) {
+         return AccessibleTap(
+           key: key,
+           onTap: onTap,
+           label: '$label view',
+           selected: active,
+           child: Container(
+             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+             decoration: BoxDecoration(color: active ? _teal : const Color(0xFFF1F5F5), borderRadius: BorderRadius.circular(20)),
+             child: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: active ? Colors.white : _secondaryText)),
+           ),
+         );
+       }
+       return Padding(
+         padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+         child: Row(children: [
+           segment(key: const Key('view_mode_list'), label: 'List', active: !calendarMode, onTap: () => onChanged(false)),
+           const SizedBox(width: 8),
+           segment(key: const Key('view_mode_calendar'), label: 'Calendar', active: calendarMode, onTap: () => onChanged(true)),
+         ]),
+       );
+     }
+   }
+   ```
+
+   (`_teal`, `_secondaryText` are already defined at the top of the file.)
+
+5. **Tests**:
+
+   - Unit tests — new `flutter_app/test/features/chores/chore_calendar_utils_test.dart`:
+     complete → completion date (local); dismissed → completion date; pending →
+     due date; overdue → due date; cancelled → null; a UTC `completedAt` converts
+     to its local day (assert against `completedAt.toLocal()`); `groupChoresByDay`
+     groups by day and drops cancelled.
+   - Widget tests — new `flutter_app/test/features/chores/chore_calendar_test.dart`
+     (pump `ChoreCalendar` directly with fixture `ChoreModel`s): Monday-first
+     header renders Mon…Sun; a completed chore renders a marker on its completion
+     day; tapping a day with a chore opens the sheet and shows the title; tapping
+     an empty day shows "Nothing done or due on this day."; prev/next changes the
+     header month label; "Today" returns to the current month.
+   - Screen tests — extend `chore_list_screen_test.dart`: the toggle is present with
+     List active by default; tapping "Calendar" shows `ChoreCalendar` and hides the
+     filter tabs (`find.text('All')` findsNothing); tapping "List" restores the
+     tabs + cards. (Existing tests must pass UNMODIFIED — List is the default view.)
+   - Layer-1 layout smoke — add a calendar-view variant to
+     `flutter_app/test/features/_layout_smoke_test.dart` (phone + large-text)
+     asserting `tester.takeException()` is null (catches grid overflow at large
+     text scales).
+
+**Acceptance criteria**:
+
+- List view is unchanged and remains the default; every existing
+  `chore_list_screen_test.dart` test passes unmodified.
+- A List/Calendar toggle is visible; Calendar shows a Monday-first month grid;
+  switching back restores the list + filter tabs.
+- Calendar days show a marker (≤3 status-colored dots + overflow count) when chores
+  map to that day; empty days show nothing.
+- Tapping a day opens a half-height `DraggableScrollableSheet` listing that day's
+  chores as read-only `ChoreCard`s; an empty day shows "Nothing done or due on
+  this day."
+- Done chores map to their LOCAL completion date (UTC→local conversion covered by a
+  test); pending/overdue map to due date; cancelled are excluded.
+- Month navigation (prev/next/Today) works and the header label updates.
+- `flutter analyze --no-pub --no-fatal-infos` clean; `flutter test --no-pub` green
+  (including the new tests and the Layer-1 calendar variant).
+- `flutter_app/pubspec.yaml` version bumped to `1.0.9+10009`.
+
+**Release (after merge)**: bump the version (step 1) is part of the feature branch;
+after merging to main, dispatch the F-Droid index rebuild immediately with
+`python3 ~/.hermes/scripts/fdroid_dispatch.py` — never wait for the nightly cron.
