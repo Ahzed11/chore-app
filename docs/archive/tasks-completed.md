@@ -4292,3 +4292,61 @@ My Chores (nit, no code change).
 same isOverdue definition as My Chores) then newest-first; other tabs
 unchanged; analyzer clean, suite 251 green, E2E green; pubspec 1.0.8+10008
 and fdroid index rebuilt after merge.
+
+---
+
+## TASK-117: All Chores — calendar view
+
+**Domain**: Flutter frontend — All Chores calendar view (client-only)
+**Depends on**: TASK-115 (Monday-first locale), TASK-111/TASK-116 (createdAt ordering)
+**Branch**: `feat/all-chores-calendar`
+
+**What & why**: User request (2026-09-30): display chores in a calendar on the
+All Chores screen so it's easy to see what's been done, with a tap on any day
+showing that day's chores. Implemented as a List ↔ Calendar toggle. Done chores
+(complete/dismissed) appear on their LOCAL completion date; pending/overdue
+appear on their due date; cancelled are excluded. Backend unchanged —
+`ChoreModel` already carried `completedAt`, `dueDate`, `status`, and `createdAt`
+(fetched by the existing `choresNotifierProvider`), so no new endpoint, schema,
+or migration.
+
+**Fix applied**:
+- New `chore_calendar_utils.dart` (`calendarDateFor` + `groupChoresByDay`):
+  complete/dismissed → `completedAt.toLocal()` date (UTC→local so a completion
+  near midnight lands on the right day); pending/overdue → `dueDate`; cancelled
+  → null; unknown statuses fail closed (null).
+- New `chore_calendar.dart`: Monday-first month grid (hard-coded Mon…Sun,
+  consistent with TASK-115), custom grid built on `DateUtils` — no third-party
+  dependency (avoids `table_calendar`'s `intl` conflict with the pinned ^0.20.2)
+  — prev/next/Today nav, per-day status dots + "+N" overflow marker, and a
+  tap-to-open day sheet (DraggableScrollableSheet, read-only ChoreCards).
+- `chore_list_screen.dart`: `_ViewModeToggle` (List default) + conditional
+  calendar/list branch; filter tabs hidden in calendar mode.
+- pubspec bumped to 1.0.9+10009.
+
+**Tests**:
+- `chore_calendar_utils_test.dart`: day-semantics matrix (complete/dismissed →
+  completion date, pending/overdue → due date, cancelled → null, UTC→local,
+  group-by-day drops cancelled).
+- `chore_calendar_test.dart`: Monday-first header (X-coordinate), dot placement
+  + statusColor, overflow marker, read-only sheet (all five mutation callbacks
+  null), empty-day message, prev/next/Today, a11y semantics label (year +
+  "today"), month-nav re-places chores.
+- `chore_list_screen_test.dart`: toggle present with List default; Calendar
+  hides filter tabs; List restores them.
+- `_layout_smoke_test.dart`: calendar variants at phone / large-text / landscape
+  (incl. a 12-month walk and a 6-month landscape walk), exception-free.
+
+**Adversarial review (2026-09-30)**: APPROVE — no critical/major bugs. 8
+minor/nit findings; 4 applied (explicit pending/overdue cases + fail-closed
+default, a11y label year + "today", redundant empty-day message consolidated,
+`_shiftMonth` day-pinned-to-1). Skipped as out-of-scope/nits: pull-to-refresh in
+calendar mode (feature asymmetry), duplicated loading/error branch DRY
+(byte-identical), smoke-test complete-fixture coverage (premise wrong —
+completedAt already set), and a TZ-pinned UTC→local CI variant (test already
+correct and TZ-independent).
+
+**Acceptance criteria**: List view unchanged (default); toggle shows a
+Monday-first month grid; done→completion-date / pending/overdue→due-date;
+tap-a-day sheet; month nav; analyzer clean; suite 283 green (32 new); pubspec
+1.0.9+10009 and fdroid index rebuilt after merge.
